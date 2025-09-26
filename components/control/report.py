@@ -1,0 +1,1193 @@
+"""
+Dataset Control Report - Link-level reporting and shapefile generation.
+
+This module handles aggregation of validation results and generation of
+per-link reports with transparent metrics instead of confusing result codes.
+"""
+
+from typing import Dict, Any, Optional
+import pandas as pd
+import geopandas as gpd
+from enum import IntEnum
+
+# Legacy enum for backwards compatibility with tests
+class ResultCode(IntEnum):
+    """Legacy result codes for backwards compatibility."""
+    SUCCESS = 0
+    FAILED_HAUSDORFF = 1
+    MISSING_POLYLINE = 2
+    LINK_NOT_IN_SHAPEFILE = 3
+    NO_OBSERVATIONS = 4
+    # Single alternative codes
+    SINGLE_ALT_ALL_VALID = 20
+    SINGLE_ALT_PARTIAL = 21
+    SINGLE_ALT_ALL_INVALID = 22
+    # Multi alternative codes
+    MULTI_ALT_ALL_VALID = 30
+    MULTI_ALT_PARTIAL = 31
+    MULTI_ALT_ALL_INVALID = 32
+    # Not recorded
+    NOT_RECORDED = 41
+from datetime import date, datetime, timedelta
+import numpy as np
+
+def _parse_timestamp_series(series: pd.Series) -> pd.Series:
+    """Coerce a timestamp-like series into timezone-naive datetimes with fallbacks."""
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return series
+
+    parsed = pd.to_datetime(series, errors='coerce')
+
+    if parsed.isna().any():
+        parsed_dayfirst = pd.to_datetime(series, errors='coerce', dayfirst=True)
+        parsed = parsed.fillna(parsed_dayfirst)
+
+    if parsed.isna().any():
+        try:
+            parsed_iso = pd.to_datetime(series, errors='coerce', format='ISO8601')
+            parsed = parsed.fillna(parsed_iso)
+        except (TypeError, ValueError):
+            pass
+
+    if pd.api.types.is_datetime64tz_dtype(parsed.dtype):
+        parsed = parsed.dt.tz_localize(None)
+
+    return parsed
+
+
+def determine_result_code(stats: Dict[str, Any]) -> tuple:
+    """
+    Legacy function to determine result code for a link.
+    For backwards compatibility with existing tests.
+
+    Args:
+        stats: Dictionary with link statistics
+
+    Returns:
+        Tuple of (result_code, result_label, num percentage)
+    """
+    total_obs = stats.get('total_observations', 0)
+    valid_obs = stats.get('valid_observations', 0)
+
+    # Check if link has no observations
+    if total_obs == 0:
+        return (ResultCode.NOT_RECORDED, "Link not recorded", 0.0)
+
+    # Calculate success percentage
+    success_pct = (valid_obs / total_obs * 100) if total_obs > 0 else 0.0
+
+    # Check if multiple alternatives
+    multi_alt = stats.get('multi_alternative_count', 0)
+    single_alt = stats.get('single_alternative_count', 0)
+
+    if multi_alt > 0:
+        # Multiple alternatives
+        if success_pct == 100:
+            return (ResultCode.MULTI_ALT_ALL_VALID, "RouteAlternative greater than one", 100.0)
+        elif success_pct > 0:
+            return (ResultCode.MULTI_ALT_PARTIAL, "RouteAlternative greater than one", success_pct)
+        else:
+            return (ResultCode.MULTI_ALT_ALL_INVALID, "RouteAlternative greater than one", 0.0)
+    else:
+        # Single alternative or no RouteAlternative
+        if success_pct == 100:
+            return (ResultCode.SINGLE_ALT_ALL_VALID, "RouteAlternative equals one", 100.0)
+        elif success_pct > 0:
+            return (ResultCode.SINGLE_ALT_PARTIAL, "RouteAlternative equals one", success_pct)
+        else:
+            return (ResultCode.SINGLE_ALT_ALL_INVALID, "RouteAlternative equals one", 0.0)
+
+
+def calculate_expected_observations(start_date: date, end_date: date, interval_minutes: int) -> int:
+    """
+    Calculate expected number of observations based on recording schedule.
+
+    Args:
+        start_date: Recording start date
+        end_date: Recording end date
+        interval_minutes: Minutes between observations
+
+    Returns:
+        Expected number of observations (24/7 recording)
+    """
+    if not start_date or not end_date:
+        return 0
+
+    # Validate date range
+    if start_date > end_date:
+        return 0  # Invalid range
+
+    # Convert to datetime (inclusive date range)
+    start_dt = datetime.combine(start_date, datetime.min.time())
+    # For end date, include the full end date by going to 00:00 of next day
+    end_dt = datetime.combine(end_date + timedelta(days=1), datetime.min.time())
+
+    # Calculate total minutes
+    total_minutes = (end_dt - start_dt).total_seconds() / 60
+
+    # Calculate expected observations (every interval_minutes within the time range)
+    expected_observations = int(total_minutes / interval_minutes)
+
+    return expected_observations
+
+
+def deduplicate_observations(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove duplicate observations by link_id, timestamp, polyline.
+
+    Args:
+        df: Input DataFrame
+
+    Returns:
+        Deduplicated DataFrame
+    """
+    if df.empty:
+        return df
+
+    # Ensure required columns exist
+    required_cols = ['link_id', 'timestamp', 'polyline']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+
+    if missing_cols:
+        # If missing required columns, return original DataFrame
+        return df
+
+    # Remove duplicates based on the combination of link_id, timestamp, and polyline
+    deduplicated = df.drop_duplicates(subset=['link_id', 'timestamp', 'polyline'], keep='first')
+
+    return deduplicated.reset_index(drop=True)
+
+
+def aggregate_link_statistics(link_data: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Aggregate validation statistics using improved timestamp-based logic.
+
+    Key insight: Route alternatives are ALTERNATIVES for the same routing request.
+    If any alternative is valid for a timestamp, that timestamp is successful for the link.
+
+    Args:
+        link_data: Filtered DataFrame for one link
+
+    Returns:
+        Dictionary with improved aggregated statistics
+    """
+    if link_data.empty:
+        return {
+            # Primary metrics (backwards compatibility)
+            'total_timestamps': 0,
+            'successful_timestamps': 0,
+            'failed_timestamps': 0,
+            'success_rate': 0.0,
+            # Alternative naming (new style)
+            'total_observations': 0,
+            'successful_observations': 0,
+            'valid_observations': 0,  # Legacy alias for successful_observations
+            'valid_timestamps': 0,  # Another legacy alias
+            'total_routes': 0,
+            'single_route_observations': 0,
+            'multi_route_observations': 0,
+            'single_alt_timestamps': 0,  # Legacy name
+            'multi_alt_timestamps': 0,   # Legacy name
+            'perfect_match_observations': 0,
+            'threshold_pass_observations': 0,
+            'perfect_match_percent': 0.0,
+            'threshold_pass_percent': 0.0,
+            'failed_percent': 0.0
+        }
+
+    # Get timestamp column name (handle both cases)
+    timestamp_col = 'timestamp' if 'timestamp' in link_data.columns else ('Timestamp' if 'Timestamp' in link_data.columns else None)
+    drop_temp_timestamp = False
+
+    if timestamp_col is None and not link_data.empty:
+        link_data = link_data.copy()
+        link_data['__synthetic_timestamp__'] = range(len(link_data))
+        timestamp_col = '__synthetic_timestamp__'
+        drop_temp_timestamp = True
+
+    # Group by timestamp to handle alternatives correctly
+    timestamp_groups = link_data.groupby(timestamp_col) if timestamp_col is not None else []
+
+    total_timestamps = len(timestamp_groups)
+    valid_timestamps = 0
+    single_alt_timestamps = 0
+    multi_alt_timestamps = 0
+
+    # Detailed breakdown counters
+    perfect_match_timestamps = 0  # Hausdorff = 0
+    threshold_pass_timestamps = 0  # 0 < Hausdorff <= threshold
+
+    for timestamp, group in timestamp_groups:
+        # Check if ANY alternative in this timestamp is valid
+        if 'is_valid' in group.columns:
+            timestamp_has_valid_alt = group['is_valid'].any()  # True if ANY alternative is valid
+        else:
+            timestamp_has_valid_alt = False
+
+        if timestamp_has_valid_alt:
+            valid_timestamps += 1
+
+            # Analyze the type of success for valid timestamps
+            if 'hausdorff_distance' in group.columns:
+                valid_routes = group[group['is_valid'] == True]
+                if len(valid_routes) > 0:
+                    min_hausdorff = valid_routes['hausdorff_distance'].min()
+                    # Use epsilon for floating point comparison
+                    epsilon = 1e-6  # Consider values < 0.000001 meters as perfect match
+                    if min_hausdorff < epsilon:
+                        perfect_match_timestamps += 1
+                    else:
+                        threshold_pass_timestamps += 1
+
+        # Count single vs multi alternative timestamps
+        num_alternatives = len(group)
+        if num_alternatives == 1:
+            single_alt_timestamps += 1
+        else:
+            multi_alt_timestamps += 1
+
+    # Calculate percentages based on timestamps, not individual alternatives
+
+    # Calculate success rate for backwards compatibility
+    success_rate = (valid_timestamps / total_timestamps * 100) if total_timestamps > 0 else 0.0
+
+    # Calculate breakdown percentages
+    perfect_match_percent = (perfect_match_timestamps / total_timestamps * 100) if total_timestamps > 0 else 0.0
+    threshold_pass_percent = (threshold_pass_timestamps / total_timestamps * 100) if total_timestamps > 0 else 0.0
+    failed_percent = ((total_timestamps - valid_timestamps) / total_timestamps * 100) if total_timestamps > 0 else 0.0
+    total_success_rate = perfect_match_percent + threshold_pass_percent
+
+    return {
+        # Primary metrics (backwards compatibility)
+        'total_timestamps': total_timestamps,
+        'successful_timestamps': valid_timestamps,
+        'failed_timestamps': total_timestamps - valid_timestamps,
+        'success_rate': success_rate,
+        # Alternative naming (new style)
+        'total_observations': total_timestamps,
+        'successful_observations': valid_timestamps,
+        'valid_observations': valid_timestamps,  # Legacy alias
+        'valid_timestamps': valid_timestamps,  # Another legacy alias
+        'total_routes': len(link_data),  # Still track total rows for reference
+        'single_route_observations': single_alt_timestamps,
+        'multi_route_observations': multi_alt_timestamps,
+        'single_alt_timestamps': single_alt_timestamps,  # Legacy name
+        'multi_alt_timestamps': multi_alt_timestamps,   # Legacy name
+        # Detailed breakdown
+        'perfect_match_observations': perfect_match_timestamps,
+        'threshold_pass_observations': threshold_pass_timestamps,
+        'perfect_match_percent': perfect_match_percent,
+        'threshold_pass_percent': threshold_pass_percent,
+        'failed_percent': failed_percent,
+        'total_success_rate': total_success_rate
+    }
+
+
+
+
+def generate_link_report(
+    validated_df: pd.DataFrame,
+    shapefile_gdf: gpd.GeoDataFrame,
+    date_filter: Optional[Dict] = None,
+    completeness_params: Optional[Dict] = None
+) -> gpd.GeoDataFrame:
+    """
+    Generate comprehensive per-link validation report with result codes and statistics.
+
+    This function aggregates row-level validation results into link-level statistics,
+    applies date filtering if specified, and generates result codes based on validation
+    patterns. The report provides a summary view of data quality per link.
+
+    The function performs these steps:
+    1. Apply optional date filtering to observations
+    2. Deduplicate observations by link_id, timestamp, and polyline
+    3. Create shapefile join keys using s_From-To format
+    4. Aggregate validation statistics per link
+    5. Determine result codes based on alternative patterns and validity rates
+    6. Add result fields to shapefile geometry
+
+    Args:
+        validated_df: DataFrame with validation results containing:
+            - link_id or Name: Link identifier (will be standardized to link_id)
+            - is_valid: Boolean validation result from validate_row()
+            - valid_code: Integer validation code from ValidCode enum
+            - route_alternative: Route alternative number
+            - timestamp: Observation timestamp (required for date filtering)
+            - polyline: Encoded polyline (used for deduplication)
+        shapefile_gdf: Reference shapefile GeoDataFrame with:
+            - From: Origin node identifier (used for s_From-To join key)
+            - To: Destination node identifier
+            - geometry: LineString geometries (preserved in output)
+        date_filter: Optional dictionary for temporal filtering:
+            - {'specific_day': date} for single day filtering
+            - {'start_date': date, 'end_date': date} for range filtering
+            - None to include all data
+
+    Returns:
+        GeoDataFrame with original shapefile geometry plus added transparent metrics:
+        - perfect_match_percent: Percentage of timestamps with exact geometry match (Hausdorff = 0)
+        - threshold_pass_percent: Percentage of timestamps passing threshold (0 < Hausdorff ≤ threshold)
+        - failed_percent: Percentage of timestamps where all alternatives failed
+        - total_observations: Number of unique timestamps observed
+        - successful_observations: Number of timestamps with ≥1 valid alternative
+        - failed_observations: Number of timestamps with all alternatives invalid
+        - total_routes: Total validation rows (including all alternatives)
+        - expected_observations: Expected observations based on recording schedule (if completeness enabled)
+        - missing_observations: Missing observations count (if completeness enabled)
+        - data_coverage_percent: Actual vs expected coverage percentage (if completeness enabled)
+        - single_route_observations: Number of timestamps with one alternative
+        - multi_route_observations: Number of timestamps with multiple alternatives
+
+    Transparent Metrics Benefits:
+        - Shows detailed performance breakdown (perfect/threshold/failed)
+        - Reveals data coverage (total_observations vs expected)
+        - Distinguishes between performance and data availability
+        - No confusing labels or codes to interpret
+
+    Examples:
+        >>> import pandas as pd
+        >>> import geopandas as gpd
+        >>> from datetime import date
+        >>>
+        >>> # Create validated data
+        >>> validated_df = pd.DataFrame({
+        ...     'link_id': ['s_653-655', 's_653-655', 's_655-657'],
+        ...     'is_valid': [True, False, True],
+        ...     'valid_code': [1, 2, 1],
+        ...     'route_alternative': [1, 1, 1],
+        ...     'timestamp': ['2025-01-01 10:00', '2025-01-01 11:00', '2025-01-01 10:00']
+        ... })
+        >>>
+        >>> # Create reference shapefile
+        >>> shapefile = gpd.GeoDataFrame({
+        ...     'From': ['653', '655'],
+        ...     'To': ['655', '657'],
+        ...     'geometry': [line1, line2]
+        ... })
+        >>>
+        >>> # Generate report
+        >>> report = generate_link_report(validated_df, shapefile)
+        >>> print(report[['From', 'To', 'perfect_match_percent', 'total_observations', 'successful_observations']])
+
+        >>> # With date filtering
+        >>> date_filter = {'specific_day': date(2025, 1, 1)}
+        >>> report = generate_link_report(validated_df, shapefile, date_filter)
+
+    Note:
+        - Links not present in validation data have performance percentages=None and total_observations=0
+        - Deduplication prevents double-counting of identical observations
+        - Date filtering is applied before aggregation and deduplication
+        - Transparent metrics show raw percentages without arbitrary binning
+        - The function preserves all original shapefile attributes and geometry
+    """
+    # Start with copy of shapefile
+    report_gdf = shapefile_gdf.copy()
+
+    # Ensure we have a link_id column for joining
+    if 'link_id' not in validated_df.columns:
+        validated_df = validated_df.copy()
+        if 'Name' in validated_df.columns:
+            validated_df['link_id'] = validated_df['Name']
+        elif 'name' in validated_df.columns:
+            validated_df['link_id'] = validated_df['name']
+
+    # Apply date filtering if specified
+    filtered_df = validated_df.copy()
+    if date_filter:
+        if 'timestamp' in filtered_df.columns:
+            # Convert timestamp to datetime if needed
+            if not pd.api.types.is_datetime64_any_dtype(filtered_df['timestamp']):
+                filtered_df['timestamp'] = pd.to_datetime(filtered_df['timestamp'])
+
+            if 'specific_day' in date_filter:
+                target_date = pd.to_datetime(date_filter['specific_day']).date()
+                filtered_df = filtered_df[filtered_df['timestamp'].dt.date == target_date]
+
+            elif 'start_date' in date_filter and 'end_date' in date_filter:
+                start_date = pd.to_datetime(date_filter['start_date'])
+                end_date = pd.to_datetime(date_filter['end_date'])
+                filtered_df = filtered_df[
+                    (filtered_df['timestamp'] >= start_date) &
+                    (filtered_df['timestamp'] <= end_date)
+                ]
+
+    # Deduplicate observations
+    filtered_df = deduplicate_observations(filtered_df)
+
+    # Create shapefile join keys
+    report_gdf['join_key'] = 's_' + report_gdf['From'].astype(str) + '-' + report_gdf['To'].astype(str)
+
+    # Initialize columns in logical order as requested
+
+    # Backwards compatibility fields (for tests)
+    report_gdf['success_rate'] = np.nan  # Use NaN instead of None for numeric dtype
+    report_gdf['total_timestamps'] = 0
+    report_gdf['successful_timestamps'] = 0
+    report_gdf['failed_timestamps'] = 0
+
+    # 1. Performance breakdown percentages (start with these)
+    report_gdf['perfect_match_percent'] = np.nan  # Use NaN instead of None
+    report_gdf['threshold_pass_percent'] = np.nan  # Use NaN instead of None
+    report_gdf['failed_percent'] = np.nan  # Use NaN instead of None
+    report_gdf['total_success_rate'] = np.nan  # Use NaN instead of None
+
+    # 2. Basic observation counts
+    report_gdf['total_observations'] = 0
+    report_gdf['successful_observations'] = 0
+    report_gdf['failed_observations'] = 0
+    report_gdf['total_routes'] = 0
+
+    # 3. Data completeness (if enabled)
+    if completeness_params:
+        report_gdf['expected_observations'] = 0
+        report_gdf['missing_observations'] = 0
+        report_gdf['data_coverage_percent'] = np.nan  # Use NaN instead of None
+
+    # 4. Route alternative breakdown (at the end)
+    report_gdf['single_route_observations'] = 0
+    report_gdf['multi_route_observations'] = 0
+    # Legacy fields for backwards compatibility
+    report_gdf['single_alt_timestamps'] = 0
+    report_gdf['multi_alt_timestamps'] = 0
+    report_gdf['result_code'] = 0
+    report_gdf['result_label'] = ''
+    report_gdf['num'] = 0.0
+
+    # Process each link in the shapefile
+    for idx, shapefile_row in report_gdf.iterrows():
+        link_join_key = shapefile_row['join_key']
+
+        # Find observations for this link
+        if 'link_id' in filtered_df.columns:
+            link_data = filtered_df[filtered_df['link_id'] == link_join_key]
+        else:
+            link_data = pd.DataFrame()  # No matching data
+
+        # Aggregate statistics for this link
+        stats = aggregate_link_statistics(link_data)
+
+        # Assign transparent metrics directly from stats
+        total_observations = stats.get('total_observations', 0)
+        successful_observations = stats.get('successful_observations', 0)
+
+        # Calculate derived metrics
+        failed_observations = total_observations - successful_observations
+
+        # Update the report with reorganized metrics in requested order
+
+        # Backwards compatibility fields (for tests)
+        report_gdf.at[idx, 'success_rate'] = stats.get('success_rate', 0.0) if total_observations > 0 else np.nan
+        report_gdf.at[idx, 'total_timestamps'] = stats.get('total_timestamps', 0)
+        report_gdf.at[idx, 'successful_timestamps'] = stats.get('successful_timestamps', 0)
+        report_gdf.at[idx, 'failed_timestamps'] = stats.get('failed_timestamps', 0)
+
+        # 1. Performance breakdown percentages (start with these)
+        report_gdf.at[idx, 'perfect_match_percent'] = stats.get('perfect_match_percent', 0.0) if total_observations > 0 else np.nan
+        report_gdf.at[idx, 'threshold_pass_percent'] = stats.get('threshold_pass_percent', 0.0) if total_observations > 0 else np.nan
+        report_gdf.at[idx, 'failed_percent'] = stats.get('failed_percent', 0.0) if total_observations > 0 else np.nan
+        report_gdf.at[idx, 'total_success_rate'] = stats.get('total_success_rate', 0.0) if total_observations > 0 else np.nan
+
+        # 2. Basic observation counts
+        report_gdf.at[idx, 'total_observations'] = total_observations
+        report_gdf.at[idx, 'successful_observations'] = successful_observations
+        report_gdf.at[idx, 'failed_observations'] = failed_observations
+        report_gdf.at[idx, 'total_routes'] = stats.get('total_routes', 0)
+
+        # 3. Data completeness (if enabled)
+        if completeness_params:
+            expected_observations = calculate_expected_observations(
+                completeness_params['start_date'],
+                completeness_params['end_date'],
+                completeness_params['interval_minutes']
+            )
+            missing_observations = max(0, expected_observations - total_observations)
+            data_coverage_percent = (total_observations / expected_observations * 100) if expected_observations > 0 else 0.0
+
+            report_gdf.at[idx, 'expected_observations'] = expected_observations
+            report_gdf.at[idx, 'missing_observations'] = missing_observations
+            report_gdf.at[idx, 'data_coverage_percent'] = data_coverage_percent
+
+        # 4. Route alternative breakdown (at the end)
+        report_gdf.at[idx, 'single_route_observations'] = stats.get('single_route_observations', 0)
+        report_gdf.at[idx, 'multi_route_observations'] = stats.get('multi_route_observations', 0)
+        # Legacy fields for backwards compatibility
+        report_gdf.at[idx, 'single_alt_timestamps'] = stats.get('single_alt_timestamps', 0)
+        report_gdf.at[idx, 'multi_alt_timestamps'] = stats.get('multi_alt_timestamps', 0)
+
+        # Determine result code for legacy tests
+        legacy_stats = {
+            'total_observations': total_observations,
+            'valid_observations': successful_observations,
+            'invalid_observations': failed_observations,
+            'single_alternative_count': stats.get('single_route_observations', 0),
+            'multi_alternative_count': stats.get('multi_route_observations', 0)
+        }
+        result_code, result_label, num = determine_result_code(legacy_stats)
+        report_gdf.at[idx, 'result_code'] = result_code
+        report_gdf.at[idx, 'result_label'] = result_label
+        report_gdf.at[idx, 'num'] = num
+
+    # Clean up temporary join key
+    report_gdf = report_gdf.drop(columns=['join_key'])
+
+    return report_gdf
+
+
+def write_shapefile_with_results(gdf: gpd.GeoDataFrame, output_path: str) -> None:
+    """
+    Write complete shapefile package with added transparent metrics fields.
+
+    Args:
+        gdf: GeoDataFrame with transparent metrics fields
+        output_path: Output shapefile path (.shp)
+
+    Returns:
+        None
+
+    Raises:
+        IOError: If write fails or shapefile package incomplete
+    """
+    try:
+        # Create a copy to avoid modifying the original
+        output_gdf = gdf.copy()
+
+        # Rename columns to fit DBF 10-character limit in logical order
+        column_mapping = {
+            # Performance breakdown percentages (start)
+            'perfect_match_percent': 'perfect_p',
+            'threshold_pass_percent': 'thresh_p',
+            'failed_percent': 'failed_p',
+            'total_success_rate': 'total_succ',
+            # Basic observation counts
+            'total_observations': 'total_obs',
+            'successful_observations': 'success_ob',
+            'failed_observations': 'failed_obs',
+            'total_routes': 'total_rts',
+            # Route alternative breakdown (end)
+            'single_route_observations': 'single_obs',
+            'multi_route_observations': 'multi_obs'
+        }
+
+        # Add completeness fields to mapping if they exist (between counts and route breakdown)
+        if 'expected_observations' in gdf.columns:
+            column_mapping.update({
+                'expected_observations': 'expect_obs',
+                'missing_observations': 'missing_ob',
+                'data_coverage_percent': 'coverage_p'
+            })
+
+        # Rename columns for DBF compatibility
+        output_gdf = output_gdf.rename(columns=column_mapping)
+
+        # Ensure proper data types
+        # Handle percentage columns
+        for col in ['perfect_p', 'thresh_p', 'failed_p', 'total_succ', 'coverage_p']:
+            if col in output_gdf.columns:
+                output_gdf[col] = pd.to_numeric(output_gdf[col], errors='coerce')
+
+        # Handle integer count columns
+        for col in ['total_obs', 'success_ob', 'failed_obs', 'total_rts', 'expect_obs', 'missing_ob', 'single_obs', 'multi_obs']:
+            if col in output_gdf.columns:
+                output_gdf[col] = output_gdf[col].astype(int)
+
+        # Ensure CRS is set for proper .prj file creation
+        if output_gdf.crs is None:
+            output_gdf = output_gdf.set_crs('EPSG:4326')
+
+        # Write shapefile with all components
+        output_gdf.to_file(output_path, driver='ESRI Shapefile')
+
+        # Verify all required shapefile components were created
+        from pathlib import Path
+        base_path = Path(output_path).with_suffix('')
+        required_files = ['.shp', '.shx', '.dbf']
+        missing_files = []
+
+        for ext in required_files:
+            if not (base_path.with_suffix(ext)).exists():
+                missing_files.append(ext)
+
+        if missing_files:
+            raise IOError(f"Shapefile creation incomplete. Missing files: {', '.join(missing_files)}")
+
+        # Check if .prj file was created (CRS information)
+        prj_file = base_path.with_suffix('.prj')
+        if not prj_file.exists():
+            # Create a basic WGS84 .prj file manually if geopandas didn't create one
+            wgs84_prj = '''GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]'''
+            with open(prj_file, 'w') as f:
+                f.write(wgs84_prj)
+
+    except Exception as e:
+        raise IOError(f"Failed to write complete shapefile package: {e}")
+
+
+def extract_failed_observations(validated_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Extract only failed observations where ALL alternatives for a timestamp failed.
+
+    For timestamps with multiple route alternatives, includes all failed alternatives
+    only when none of the alternatives for that timestamp are valid.
+
+    Args:
+        validated_df: DataFrame with validation results containing:
+            - link_id or Name: Link identifier
+            - timestamp: Observation timestamp
+            - is_valid: Boolean validation result
+            - route_alternative: Route alternative number (optional)
+            - All other original columns preserved
+
+    Returns:
+        DataFrame containing only failed observations where:
+        - Single alternative timestamps: The alternative is invalid
+        - Multi-alternative timestamps: ALL alternatives are invalid
+    """
+    if validated_df.empty:
+        return validated_df
+
+    # Ensure we have a link_id column
+    df = validated_df.copy()
+    if 'link_id' not in df.columns:
+        if 'Name' in df.columns:
+            df['link_id'] = df['Name']
+        elif 'name' in df.columns:
+            df['link_id'] = df['name']
+
+    # Get timestamp column name
+    timestamp_col = 'timestamp' if 'timestamp' in df.columns else 'Timestamp'
+
+    # Handle missing columns gracefully
+    if 'link_id' not in df.columns or timestamp_col not in df.columns:
+        return pd.DataFrame()  # Can't process without required columns
+
+    # Group by link_id and timestamp
+    failed_observations = []
+
+    for (link_id, timestamp), group in df.groupby(['link_id', timestamp_col]):
+        # Check if ALL alternatives for this timestamp failed
+        if 'is_valid' in group.columns:
+            all_failed = not group['is_valid'].any()  # True if NO alternative is valid
+
+            if all_failed:
+                # Include all rows from this group (all failed alternatives)
+                failed_observations.append(group)
+
+    # Combine all failed observations
+    if failed_observations:
+        result = pd.concat(failed_observations, ignore_index=True)
+        # Sort by link_id, timestamp, and route_alternative if present
+        sort_cols = ['link_id', timestamp_col]
+        if 'RouteAlternative' in result.columns:
+            sort_cols.append('RouteAlternative')
+        elif 'route_alternative' in result.columns:
+            sort_cols.append('route_alternative')
+
+        result = result.sort_values(sort_cols).reset_index(drop=True)
+        return result
+    else:
+        # Return empty DataFrame with same columns as input
+        return pd.DataFrame(columns=df.columns)
+
+
+def extract_best_valid_observations(validated_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Extract best valid observation per timestamp using weighted scoring.
+
+    For single alternative timestamps: Keep if valid
+    For multi-alternative timestamps: Select best valid based on weighted score
+
+    Scoring weights (in order of importance):
+    1. Hausdorff distance: Lower is better (weight: -1000)
+    2. Length ratio deviation from 1.0: Smaller is better (weight: -100)
+    3. Coverage percent: Higher is better (weight: +1)
+
+    Args:
+        validated_df: DataFrame with validation results containing:
+            - link_id or Name: Link identifier
+            - timestamp: Observation timestamp
+            - is_valid: Boolean validation result
+            - hausdorff_distance: Distance metric (lower is better)
+            - length_ratio: Length ratio (closer to 1.0 is better) - optional
+            - coverage_percent: Coverage percentage (higher is better) - optional
+            - route_alternative: Route alternative number
+
+    Returns:
+        DataFrame containing best valid observation per timestamp:
+        - One row per timestamp where at least one valid alternative exists
+        - For multi-alternative timestamps: The alternative with best score
+    """
+    if validated_df.empty:
+        return validated_df
+
+    # Ensure we have a link_id column
+    df = validated_df.copy()
+    if 'link_id' not in df.columns:
+        if 'Name' in df.columns:
+            df['link_id'] = df['Name']
+        elif 'name' in df.columns:
+            df['link_id'] = df['name']
+
+    # Get timestamp column name
+    timestamp_col = 'timestamp' if 'timestamp' in df.columns else 'Timestamp'
+
+    # Handle missing columns gracefully
+    if 'link_id' not in df.columns or timestamp_col not in df.columns:
+        return pd.DataFrame()  # Can't process without required columns
+
+    # Calculate weighted scores for valid observations
+    def calculate_score(row):
+        """Calculate weighted score for a valid observation."""
+        score = 0.0
+
+        # Hausdorff distance (most important - lower is better)
+        if 'hausdorff_distance' in row and pd.notna(row['hausdorff_distance']):
+            score -= row['hausdorff_distance'] * 1000
+
+        # Length ratio deviation (second priority - closer to 1.0 is better)
+        if 'length_ratio' in row and pd.notna(row['length_ratio']):
+            deviation = abs(row['length_ratio'] - 1.0)
+            score -= deviation * 100
+
+        # Coverage percent (third priority - higher is better)
+        if 'coverage_percent' in row and pd.notna(row['coverage_percent']):
+            score += row['coverage_percent'] * 1
+
+        return score
+
+    # Add score column for valid observations
+    if 'is_valid' in df.columns:
+        df.loc[df['is_valid'] == True, 'selection_score'] = df[df['is_valid'] == True].apply(calculate_score, axis=1)
+    else:
+        return pd.DataFrame(columns=df.columns)  # No validity column
+
+    # Group by link_id and timestamp
+    best_observations = []
+
+    for (link_id, timestamp), group in df.groupby(['link_id', timestamp_col]):
+        # Get valid alternatives
+        valid_alternatives = group[group['is_valid'] == True] if 'is_valid' in group.columns else pd.DataFrame()
+
+        if not valid_alternatives.empty:
+            if len(valid_alternatives) == 1:
+                # Single valid alternative - keep it
+                best_observations.append(valid_alternatives)
+            else:
+                # Multiple valid alternatives - select best score
+                best_idx = valid_alternatives['selection_score'].idxmax()
+                best_observations.append(valid_alternatives.loc[[best_idx]])
+
+    # Combine all best observations
+    if best_observations:
+        result = pd.concat(best_observations, ignore_index=True)
+
+        # Remove temporary score column
+        if 'selection_score' in result.columns:
+            result = result.drop(columns=['selection_score'])
+
+        # Sort by link_id, timestamp, and route_alternative if present
+        sort_cols = ['link_id', timestamp_col]
+        if 'RouteAlternative' in result.columns:
+            sort_cols.append('RouteAlternative')
+        elif 'route_alternative' in result.columns:
+            sort_cols.append('route_alternative')
+
+        result = result.sort_values(sort_cols).reset_index(drop=True)
+        return result
+    else:
+        # Return empty DataFrame with same columns as input (minus score column)
+        result_cols = [col for col in df.columns if col != 'selection_score']
+        return pd.DataFrame(columns=result_cols)
+
+
+def extract_missing_observations(
+    validated_df: pd.DataFrame,
+    completeness_params: Dict,
+    shapefile_gdf: gpd.GeoDataFrame
+) -> pd.DataFrame:
+    """
+    Extract missing observations by finding RequestedTime gaps for links with actual data.
+
+    Creates synthetic rows for missing RequestedTime intervals with:
+    - link_id: From links that have actual data
+    - RequestedTime: Missing RequestedTime interval
+    - is_valid: False
+    - valid_code: 94 (MISSING_OBSERVATION)
+    - All other fields: None/empty
+
+    Args:
+        validated_df: DataFrame with actual validation results
+        completeness_params: Dict with start_date, end_date, interval_minutes
+        shapefile_gdf: Reference shapefile for all possible links
+
+    Returns:
+        DataFrame containing synthetic rows for missing RequestedTime intervals
+    """
+    if not completeness_params or validated_df.empty or shapefile_gdf.empty:
+        return pd.DataFrame()
+
+    from datetime import datetime, timedelta
+    import pandas as pd
+
+    # Extract parameters
+    start_date = completeness_params['start_date']
+    end_date = completeness_params['end_date']
+    interval_minutes = completeness_params['interval_minutes']
+
+    # Generate all expected timestamps
+    start_dt = datetime.combine(start_date, datetime.min.time())
+    end_dt = datetime.combine(end_date + timedelta(days=1), datetime.min.time())
+
+    expected_timestamps = []
+    current_dt = start_dt
+    while current_dt < end_dt:
+        expected_timestamps.append(current_dt)
+        current_dt += timedelta(minutes=interval_minutes)
+
+    # Standardize validated_df columns
+    df = validated_df.copy()
+    if 'link_id' not in df.columns:
+        if 'Name' in df.columns:
+            df['link_id'] = df['Name']
+        elif 'name' in df.columns:
+            df['link_id'] = df['name']
+
+    # Look for RequestedTime field (primary) or fall back to timestamp fields
+    requested_time_col = None
+    if 'RequestedTime' in df.columns:
+        requested_time_col = 'RequestedTime'
+    elif 'requested_time' in df.columns:
+        requested_time_col = 'requested_time'
+    elif 'Timestamp' in df.columns:
+        requested_time_col = 'Timestamp'
+    elif 'timestamp' in df.columns:
+        requested_time_col = 'timestamp'
+
+    if 'link_id' not in df.columns or requested_time_col is None:
+        return pd.DataFrame()
+
+    # Standardize to 'requested_time' column name
+    if requested_time_col != 'requested_time':
+        df['requested_time'] = df[requested_time_col]
+        requested_time_col = 'requested_time'
+
+    if not pd.api.types.is_datetime64_any_dtype(df[requested_time_col]):
+        # First try normal parsing
+        df[requested_time_col] = _parse_timestamp_series(df[requested_time_col])
+
+        # If still not datetime (e.g., time-only format like "HH:MM:SS"), combine with date
+        if not pd.api.types.is_datetime64_any_dtype(df[requested_time_col]):
+            # Combine time-only values with the start date
+            try:
+                df[requested_time_col] = pd.to_datetime(
+                    completeness_params['start_date'].strftime('%Y-%m-%d') + ' ' + df[requested_time_col].astype(str),
+                    errors='coerce'
+                )
+            except Exception:
+                # Fallback to original parsing
+                df[requested_time_col] = _parse_timestamp_series(df[requested_time_col])
+
+    # Get link IDs that actually have data in the validated_df
+    # Only check for missing observations in links that have some actual data
+    links_with_data = set(df['link_id'].unique())
+
+    # Normalize RequestedTime to interval boundaries for proper comparison
+    def normalize_to_interval(ts, interval_minutes):
+        """Round RequestedTime down to interval boundary"""
+        if pd.isna(ts):
+            return ts
+        minutes = ts.minute
+        normalized_minutes = (minutes // interval_minutes) * interval_minutes
+        return ts.replace(minute=normalized_minutes, second=0, microsecond=0)
+
+    # Normalize actual RequestedTime values to interval boundaries
+    df['normalized_requested_time'] = df[requested_time_col].apply(
+        lambda ts: normalize_to_interval(ts, interval_minutes)
+    )
+
+    # Find existing (link, normalized_requested_time) combinations
+    existing_combinations = set(
+        zip(df['link_id'], df['normalized_requested_time'])
+    )
+
+    # Find missing combinations correctly handling RequestedTime + Date combinations
+    missing_observations = []
+
+    for link_id in links_with_data:
+        # Get this link's actual data
+        link_df = df[df['link_id'] == link_id].copy()
+
+        if link_df.empty:
+            continue
+
+        # For each expected date+time combination, check if it exists
+        for expected_dt in expected_timestamps:
+            expected_time_str = expected_dt.strftime('%H:%M:%S')
+            expected_date = expected_dt.date()
+
+            # Check if this link has data for this RequestedTime + Date combination
+            # We need to check both RequestedTime match and date match
+            matching_rows = link_df[
+                (link_df['RequestedTime'] == expected_time_str) |
+                (link_df['RequestedTime'] == expected_dt.strftime('%H:%M:%S'))
+            ]
+
+            # If we have timestamp/datetime data, also check date match
+            if 'Timestamp' in link_df.columns or 'timestamp' in link_df.columns:
+                timestamp_col = 'Timestamp' if 'Timestamp' in link_df.columns else 'timestamp'
+
+                # Parse timestamp dates to compare
+                try:
+                    timestamp_dates = pd.to_datetime(link_df[timestamp_col], errors='coerce', dayfirst=True).dt.date
+                    date_matches = timestamp_dates == expected_date
+
+                    # Find rows that match both time and date
+                    time_matches = (
+                        (link_df['RequestedTime'] == expected_time_str) |
+                        (link_df['RequestedTime'] == expected_dt.strftime('%H:%M:%S'))
+                    )
+
+                    # Must match both time AND date
+                    matching_rows = link_df[time_matches & date_matches]
+
+                except Exception:
+                    # Fallback to just time matching if date parsing fails
+                    pass
+
+            # If no matching rows found, this is a missing observation
+            if matching_rows.empty:
+                missing_row = {
+                    'Name': link_id,  # Use original column name
+                    'link_id': link_id,
+                    'RequestedTime': expected_time_str,  # Output as time string
+                    'is_valid': False,
+                    'valid_code': 94,  # Code for MISSING_OBSERVATION
+                    'hausdorff_distance': None,
+                    'hausdorff_pass': False,
+                }
+
+                # Add other common columns as None/empty
+                for col in ['RouteAlternative', 'polyline', 'SegmentID', 'DataID']:
+                    if col in df.columns:
+                        missing_row[col] = None
+
+                # Add length/coverage fields if they exist in original data
+                for col in ['length_ratio', 'length_pass', 'coverage_percent', 'coverage_pass']:
+                    if col in df.columns:
+                        missing_row[col] = None
+
+                missing_observations.append(missing_row)
+
+    if missing_observations:
+        result = pd.DataFrame(missing_observations)
+
+        # Sort by link_id and RequestedTime
+        sort_cols = ['link_id', 'RequestedTime']
+        result = result.sort_values(sort_cols).reset_index(drop=True)
+
+        return result
+    else:
+        # Return empty DataFrame with same structure as validated_df
+        return pd.DataFrame(columns=df.columns)
+
+
+def extract_no_data_links(
+    validated_df: pd.DataFrame,
+    shapefile_gdf: gpd.GeoDataFrame
+) -> pd.DataFrame:
+    """
+    Extract links that exist in shapefile but have no observations in the CSV.
+
+    Creates synthetic rows for no-data links with:
+    - link_id: From shapefile
+    - timestamp: None (no specific time)
+    - is_valid: False
+    - valid_code: 95 (NO_DATA_LINK)
+    - All other fields: None/empty
+
+    Args:
+        validated_df: DataFrame with actual validation results
+        shapefile_gdf: Reference shapefile for all possible links
+
+    Returns:
+        DataFrame containing synthetic rows for links with no data
+    """
+    if validated_df.empty or shapefile_gdf.empty:
+        return pd.DataFrame()
+
+    # Get all possible link IDs from shapefile
+    shapefile_links = set('s_' + str(row['From']) + '-' + str(row['To'])
+                         for _, row in shapefile_gdf.iterrows())
+
+    # Standardize validated_df columns to get links with data
+    df = validated_df.copy()
+    if 'link_id' not in df.columns:
+        if 'Name' in df.columns:
+            df['link_id'] = df['Name']
+        elif 'name' in df.columns:
+            df['link_id'] = df['name']
+
+    if 'link_id' not in df.columns:
+        # If no link_id column, assume all shapefile links have no data
+        links_with_data = set()
+    else:
+        links_with_data = set(df['link_id'].unique())
+
+    # Find links in shapefile but not in data
+    no_data_links = shapefile_links - links_with_data
+
+    if not no_data_links:
+        return pd.DataFrame()
+
+    # Create synthetic no-data rows
+    no_data_observations = []
+
+    for link_id in no_data_links:
+        no_data_row = {
+            'Name': link_id,  # Use original column name
+            'link_id': link_id,
+            'timestamp': None,  # No specific timestamp for no-data links
+            'is_valid': False,
+            'valid_code': 95,  # New code for NO_DATA_LINK
+            'hausdorff_distance': None,
+            'hausdorff_pass': False,
+        }
+
+        # Add other common columns as None/empty to match structure
+        if 'RouteAlternative' in df.columns:
+            no_data_row['RouteAlternative'] = None
+        if 'polyline' in df.columns:
+            no_data_row['polyline'] = None
+        if 'SegmentID' in df.columns:
+            no_data_row['SegmentID'] = None
+        if 'DataID' in df.columns:
+            no_data_row['DataID'] = None
+
+        # Add length/coverage fields if they exist
+        for col in ['length_ratio', 'length_pass', 'coverage_percent', 'coverage_pass']:
+            if col in df.columns:
+                no_data_row[col] = None
+
+        no_data_observations.append(no_data_row)
+
+    if no_data_observations:
+        result = pd.DataFrame(no_data_observations)
+        # Sort by link_id
+        result = result.sort_values('link_id').reset_index(drop=True)
+        return result
+    else:
+        return pd.DataFrame()
+
+
+def create_csv_matching_shapefile(
+    csv_df: pd.DataFrame,
+    shapefile_gdf: gpd.GeoDataFrame,
+    output_path: str,
+    geometry_source: str = 'polyline'
+) -> None:
+    """
+    Create a shapefile that exactly matches a CSV file with appropriate geometries.
+
+    Args:
+        csv_df: DataFrame from CSV file (failed_observations, missing_observations, etc.)
+        shapefile_gdf: Original reference shapefile for fallback geometry
+        output_path: Path for output shapefile
+        geometry_source: 'polyline' for decoded polylines, 'shapefile' for original geometry
+    """
+    if csv_df.empty:
+        print(f"Warning: Empty CSV data, skipping shapefile creation: {output_path}")
+        return
+
+    import polyline
+    from shapely.geometry import LineString
+
+    # Create shapefile lookup for fallback
+    shapefile_lookup = {}
+    for _, row in shapefile_gdf.iterrows():
+        link_id = f's_{row["From"]}-{row["To"]}'
+        shapefile_lookup[link_id] = row.geometry
+
+    # Process each row to create geometries
+    geometries = []
+    shapefile_rows = []
+
+    for idx, row in csv_df.iterrows():
+        geometry = None
+        link_id = row.get('Name') or row.get('link_id')
+
+        try:
+            if geometry_source == 'polyline' and 'polyline' in row and pd.notna(row['polyline']):
+                # Use decoded polyline geometry (for failed observations)
+                try:
+                    decoded_coords = polyline.decode(str(row['polyline']))
+                    if len(decoded_coords) >= 2:
+                        # Convert lat,lon to lon,lat for shapely
+                        coords_lonlat = [(lon, lat) for lat, lon in decoded_coords]
+                        geometry = LineString(coords_lonlat)
+                    else:
+                        print(f"Warning: Insufficient coordinates in polyline for row {idx}")
+                        # Fallback to shapefile geometry
+                        if link_id in shapefile_lookup:
+                            geometry = shapefile_lookup[link_id]
+                except Exception as e:
+                    print(f"Warning: Failed to decode polyline for row {idx}: {e}")
+                    # Fallback to shapefile geometry
+                    if link_id in shapefile_lookup:
+                        geometry = shapefile_lookup[link_id]
+            else:
+                # Use original shapefile geometry (for missing/no-data observations)
+                if link_id in shapefile_lookup:
+                    geometry = shapefile_lookup[link_id]
+                else:
+                    print(f"Warning: Link {link_id} not found in shapefile for row {idx}")
+
+            if geometry is not None:
+                geometries.append(geometry)
+                shapefile_rows.append(row)
+            else:
+                print(f"Warning: No geometry found for row {idx}, link {link_id}")
+
+        except Exception as e:
+            print(f"Warning: Error processing row {idx}: {e}")
+            continue
+
+    if not geometries:
+        print(f"Warning: No valid geometries created for shapefile: {output_path}")
+        return
+
+    # Create GeoDataFrame with exact same columns as CSV
+    result_gdf = gpd.GeoDataFrame(shapefile_rows, geometry=geometries)
+
+    # Set CRS (WGS84 for polylines, original CRS for shapefile geometry)
+    result_gdf.crs = 'EPSG:4326'  # WGS84 for consistency
+
+    # Reproject to match original shapefile if needed
+    if shapefile_gdf.crs and shapefile_gdf.crs != result_gdf.crs:
+        try:
+            result_gdf = result_gdf.to_crs(shapefile_gdf.crs)
+        except Exception as e:
+            print(f"Warning: CRS reprojection failed: {e}")
+
+    # Save shapefile
+    try:
+        result_gdf.to_file(output_path, driver='ESRI Shapefile')
+        print(f"Created shapefile matching CSV: {output_path}")
+    except Exception as e:
+        print(f"Error creating shapefile: {e}")
+
+
+def create_failed_observations_shapefile(
+    failed_observations_df: pd.DataFrame,
+    shapefile_gdf: gpd.GeoDataFrame,
+    output_path: str
+) -> None:
+    """
+    Create a shapefile for failed observations that exactly matches the CSV.
+    Uses decoded polyline geometries for each row.
+    """
+    create_csv_matching_shapefile(
+        csv_df=failed_observations_df,
+        shapefile_gdf=shapefile_gdf,
+        output_path=output_path,
+        geometry_source='polyline'
+    )
+

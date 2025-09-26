@@ -1,0 +1,38 @@
+# Core Application Dependencies
+streamlit>=1.28.0
+pandas>=2.0.0
+numpy>=1.24.0
+holidays>=0.34
+
+# Geospatial Libraries
+geopandas>=0.14.0
+folium>=0.15.0
+pyproj>=3.6.0
+shapely>=2.0.0
+fiona>=1.9.0
+rtree>=1.0.0
+contextily>=1.4.0
+
+# Visualization
+matplotlib>=3.7.0
+plotly>=5.0.0
+streamlit-folium>=0.15.0
+
+# Data Processing & Analysis
+scikit-learn>=1.3.0
+chardet>=5.0.0
+
+# Google Maps Polyline Decoding
+polyline>=2.0.0
+
+# Testing Framework (Development)
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Optional: Performance Monitoring
+memory-profiler>=0.61.0
+
+# System Dependencies (Windows-specific alternatives)
+# Note: Some users may need GDAL binaries for geospatial operations
+# Windows users can install from: https://www.lfd.uci.edu/~gohlke/pythonlibs/
+# Or use conda: conda install -c conda-forge gdal

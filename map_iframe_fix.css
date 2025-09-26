@@ -1,0 +1,245 @@
+/* 
+ * Comprehensive fix for Streamlit-Folium iframe grey out bug during scroll events
+ * This CSS prevents iframe content from being lost during viewport changes
+ */
+
+/* Main iframe stability fixes */
+iframe[data-testid="stIFrame"] {
+    position: relative !important;
+    top: 0 !important;
+    left: 0 !important;
+    transform: none !important;
+    transition: none !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    background-color: white !important;
+    min-height: 700px !important;
+    overflow: hidden !important;
+    /* Prevent browser optimizations that cause content loss */
+    will-change: auto !important;
+    backface-visibility: visible !important;
+    transform-style: flat !important;
+}
+
+/* Force iframe body to maintain content */
+iframe[data-testid="stIFrame"] body {
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    background-color: white !important;
+    /* Ensure content stays visible */
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+/* Prevent iframe content displacement during scroll */
+.stStreamlitContainer iframe {
+    will-change: auto !important;
+    backface-visibility: visible !important;
+    transform-style: flat !important;
+    /* Force hardware acceleration off to prevent rendering issues */
+    transform: translateZ(0) !important;
+}
+
+/* Force iframe to maintain content during viewport changes */
+[data-testid="stIFrame"] > iframe {
+    position: sticky !important;
+    z-index: 1 !important;
+    contain: layout style paint !important;
+    /* Prevent content from being culled during scroll */
+    content-visibility: visible !important;
+}
+
+/* Additional Folium-specific fixes */
+.folium-map {
+    background-color: white !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    /* Prevent map tiles from disappearing */
+    will-change: auto !important;
+}
+
+/* Ensure Leaflet map container stays visible */
+.leaflet-container {
+    background-color: white !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    /* Prevent tile layer issues during scroll */
+    transform: none !important;
+    will-change: auto !important;
+}
+
+/* Fix for map tiles losing content during scroll */
+.leaflet-tile-pane {
+    visibility: visible !important;
+    opacity: 1 !important;
+    will-change: auto !important;
+}
+
+/* Prevent vector layers from disappearing */
+.leaflet-overlay-pane {
+    visibility: visible !important;
+    opacity: 1 !important;
+    will-change: auto !important;
+}
+
+/* Performance optimizations */
+.leaflet-map-pane {
+    will-change: auto !important;
+    transform: none !important;
+    backface-visibility: visible !important;
+}
+
+/* Mobile and responsive fixes */
+@media (max-width: 768px) {
+    iframe[data-testid="stIFrame"] {
+        min-height: 500px !important;
+    }
+}
+
+/* Browser-specific fixes */
+/* Chrome/Webkit */
+@supports (-webkit-appearance: none) {
+    iframe[data-testid="stIFrame"] {
+        -webkit-transform: translateZ(0) !important;
+        -webkit-backface-visibility: visible !important;
+    }
+}
+
+/* Firefox */
+@-moz-document url-prefix() {
+    iframe[data-testid="stIFrame"] {
+        transform: translateZ(0) !important;
+    }
+}
+
+/* Safari */
+@supports (-webkit-hyphens: none) {
+    iframe[data-testid="stIFrame"] {
+        -webkit-transform: translate3d(0,0,0) !important;
+    }
+}
+
+/* Enhanced fixes for Streamlit container opacity issues during map interactions */
+
+/* Prevent Streamlit containers from getting opacity during map updates */
+.stContainer, 
+[data-testid="stContainer"],
+.element-container,
+[data-testid="element-container"],
+.stColumn,
+[data-testid="stColumn"] {
+    opacity: 1 !important;
+    visibility: visible !important;
+    transition: none !important;
+    /* Prevent Streamlit from applying loading overlays */
+    position: relative !important;
+}
+
+/* Target main content area that might get opacity during updates */
+.main .block-container,
+[data-testid="main"] .block-container,
+.stMainBlockContainer,
+[data-testid="stMainBlockContainer"] {
+    opacity: 1 !important;
+    visibility: visible !important;
+    transition: none !important;
+}
+
+/* Prevent opacity on tab panels during map interactions */
+[role="tabpanel"],
+.stTabs [role="tabpanel"],
+[data-testid="stTabs"] [role="tabpanel"] {
+    opacity: 1 !important;
+    visibility: visible !important;
+    transition: none !important;
+}
+
+/* Force visibility on all Streamlit custom components during updates */
+[data-testid="stCustomComponentV1"],
+.stCustomComponentV1 {
+    opacity: 1 !important;
+    visibility: visible !important;
+    transition: none !important;
+    /* Prevent rerendering artifacts */
+    backface-visibility: visible !important;
+    transform: none !important;
+}
+
+/* Target Streamlit's loading overlay and spinner containers */
+.stSpinner,
+[data-testid="stSpinner"],
+.stLoadingOverlay,
+[data-testid="stLoadingOverlay"] {
+    display: none !important;
+    opacity: 0 !important;
+    visibility: hidden !important;
+    /* Completely remove loading overlays that cause opacity issues */
+    position: absolute !important;
+    top: -9999px !important;
+}
+
+/* Prevent rerun overlay during map interactions */
+.stAppViewContainer > div[style*="opacity"],
+[data-testid="stAppViewContainer"] > div[style*="opacity"] {
+    opacity: 1 !important;
+    transition: none !important;
+}
+
+/* Force full opacity on elements that might fade during map operations */
+.streamlit-expanderHeader,
+.streamlit-expanderContent,
+.stAlert,
+[data-testid="stAlert"],
+.stMetric,
+[data-testid="stMetric"],
+.stSelectbox,
+[data-testid="stSelectbox"] {
+    opacity: 1 !important;
+    visibility: visible !important;
+    transition: none !important;
+}
+
+/* Specific fix for elements below the map that get transparent */
+.stContainer > div,
+.element-container > div,
+[data-testid="stContainer"] > div,
+[data-testid="element-container"] > div {
+    opacity: 1 !important;
+    visibility: visible !important;
+    background-color: inherit !important;
+    /* Prevent CSS inheritance issues */
+    filter: none !important;
+}
+
+/* Override any dynamic inline styles that set opacity */
+[style*="opacity: 0"],
+[style*="opacity:0"],
+[style*="opacity: ."] {
+    opacity: 1 !important;
+    transition: none !important;
+}
+
+/* Force visibility for scrolled content */
+.stDataFrame,
+[data-testid="stDataFrame"],
+.stTable,
+[data-testid="stTable"],
+.stJson,
+[data-testid="stJson"] {
+    opacity: 1 !important;
+    visibility: visible !important;
+    background-color: white !important;
+}
+
+/* Additional fix for map container parents */
+.stTabs,
+[data-testid="stTabs"],
+.stColumns,
+[data-testid="stColumns"] {
+    opacity: 1 !important;
+    visibility: visible !important;
+    /* Prevent container from becoming transparent during updates */
+    background: transparent !important;
+    filter: none !important;
+}

@@ -1,0 +1,2233 @@
+"""
+Google Maps Link Monitoring CSV Processor - Streamlit GUI Application
+
+This module provides the Streamlit-based web interface for configuring
+processing parameters, uploading files, and viewing results.
+"""
+
+import streamlit as st
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import json
+import tempfile
+import os
+from datetime import datetime, date
+from typing import Dict, List, Optional
+
+# Import processing functions
+from components.processing.pipeline import run_pipeline, resolve_hebrew_encoding
+
+# Import maps page
+from components.maps import render_maps_page
+
+# Import control component
+from components.control import control_page
+
+# Configure Streamlit page
+st.set_page_config(
+    page_title="Google Maps Link Monitoring Processor",
+    page_icon="🚗",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+
+def fix_hebrew_encoding(text):
+    """Fix corrupted Hebrew text encoding issues"""
+    if pd.isna(text) or not isinstance(text, str):
+        return text
+
+    try:
+        # Handle common Hebrew corruption patterns
+        # Method 1: Try to fix UTF-8 bytes misinterpreted as other encodings
+        corruption_indicators = ['־', '֞', '֟', '֠', '֡', '֢', '֣', '֤', '֥', '֦', '֧', '֨', '֩', '֪', '֫', '֬', '֭', '֮', 'ι', 'ε', 'ν', 'η', 'μ', 'β']
+        if any(char in text for char in corruption_indicators):
+            # Text contains Hebrew-like corruption - try to recover
+
+            # Common Hebrew day names mapping for fallback
+            hebrew_days = {
+                'יום א': 'יום א',  # Sunday
+                'יום ב': 'יום ב',  # Monday
+                'יום ג': 'יום ג',  # Tuesday
+                'יום ד': 'יום ד',  # Wednesday
+                'יום ה': 'יום ה',  # Thursday
+                'יום ו': 'יום ו',  # Friday
+                'שבת': 'שבת'       # Saturday
+            }
+
+            hebrew_types = {
+                'יום חול': 'יום חול',  # Weekday
+                'חג': 'חג',             # Holiday
+                'ערב חג': 'ערב חג'       # Holiday eve
+            }
+
+            # Try pattern matching for common corrupted patterns based on actual observations
+            # Map corrupted text patterns to correct Hebrew
+            corruption_map = {
+                '־¹־µ־½ֲ ־²': 'יום ג',      # Tuesday
+                '־¹־µ־½ ־·־µ־¼': 'יום חול',  # Weekday
+                'ιεν� β': 'יום ג',         # Tuesday (alternate corruption)
+                'ιεν ηεμ': 'יום חול',      # Weekday (alternate corruption)
+            }
+
+            # Check for exact matches first
+            if text in corruption_map:
+                return corruption_map[text]
+
+            # Check for partial matches for flexibility
+            if '־¹־µ־½' in text:
+                if '־²' in text or 'β' in text:
+                    return 'יום ג'  # Tuesday
+                elif '־·־µ־¼' in text or 'ηεμ' in text:
+                    return 'יום חול'  # Weekday
+                elif '־¤' in text:
+                    return 'יום ה'  # Thursday
+                elif '־º' in text:
+                    return 'יום א'  # Sunday
+                elif '־¡' in text:
+                    return 'יום ב'  # Monday
+                elif '־¥' in text:
+                    return 'יום ד'  # Wednesday
+
+        # Try direct UTF-8 decoding repair
+        try:
+            # Encode as latin-1 then decode as utf-8 (common double-encoding fix)
+            if text.encode('latin-1'):
+                fixed = text.encode('latin-1').decode('utf-8')
+                if any(char in fixed for char in ['י', 'ו', 'ם', 'ח', 'ל', 'ג', 'ד', 'ה', 'ב', 'א']):
+                    return fixed
+        except:
+            pass
+
+        # Return original if no fix worked
+        return text
+
+    except Exception:
+        # Return original text if any error occurs
+        return text
+
+
+def create_shapefile_zip_package(shp_path: str, output_dir: str) -> str:
+    """
+    Create a ZIP package containing all shapefile components.
+
+    Args:
+        shp_path: Path to the main .shp file
+        output_dir: Output directory for the ZIP file
+
+    Returns:
+        Path to the created ZIP file
+    """
+    import zipfile
+    from pathlib import Path
+
+    base_path = Path(shp_path).with_suffix('')
+    zip_path = Path(output_dir) / f"{base_path.name}_shapefile.zip"
+
+    # List of shapefile extensions to include
+    shapefile_extensions = ['.shp', '.shx', '.dbf', '.prj', '.cpg', '.xml']
+
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for ext in shapefile_extensions:
+            component_path = base_path.with_suffix(ext)
+            if component_path.exists():
+                # Add file to ZIP with just the filename (no path)
+                zipf.write(component_path, component_path.name)
+
+    return str(zip_path)
+
+
+def load_shapefile_robust(shp_path: str):
+    """
+    Load shapefile with robust error handling for missing companion files.
+
+    Args:
+        shp_path: Path to the .shp file
+
+    Returns:
+        GeoDataFrame containing the shapefile data
+
+    Raises:
+        Exception: If shapefile cannot be loaded or repaired
+    """
+    import geopandas as gpd
+    import os
+    from pathlib import Path
+
+    try:
+        # First, try loading normally
+        return gpd.read_file(shp_path)
+
+    except Exception as e:
+        # If loading fails, try to handle missing companion files
+        if "shx" in str(e).lower():
+            # Missing .shx file - try to recreate it or use alternative approach
+            try:
+                # Set GDAL/OGR configuration to restore SHX
+                os.environ['SHAPE_RESTORE_SHX'] = 'YES'
+
+                # Try loading again
+                gdf = gpd.read_file(shp_path)
+
+                import streamlit as st
+                st.warning("⚠️ Recreated missing .shx index file. Shapefile loaded successfully.")
+
+                return gdf
+
+            except Exception as e2:
+                # If that fails, try creating minimal companion files
+                try:
+                    return create_minimal_shapefile_companions(shp_path)
+                except Exception as e3:
+                    raise Exception(f"Could not load shapefile. Original error: {e}. "
+                                  f"Recovery attempts failed: {e2}, {e3}. "
+                                  f"Please upload a complete shapefile package as a ZIP file.")
+        else:
+            # Different error - re-raise
+            raise e
+
+
+def create_minimal_shapefile_companions(shp_path: str):
+    """
+    Create minimal companion files for a standalone .shp file.
+
+    Args:
+        shp_path: Path to the .shp file
+
+    Returns:
+        GeoDataFrame if successful
+    """
+    import geopandas as gpd
+    from pathlib import Path
+    import struct
+
+    base_path = Path(shp_path).with_suffix('')
+
+    # Try to create a minimal .shx file by reading the .shp header
+    try:
+        with open(shp_path, 'rb') as shp_file:
+            # Read SHP header to get basic info
+            shp_file.seek(24)  # Skip to file length
+            file_length = struct.unpack('>I', shp_file.read(4))[0]
+
+            # Create minimal .shx file
+            shx_path = base_path.with_suffix('.shx')
+            with open(shx_path, 'wb') as shx_file:
+                # Write SHX header (100 bytes)
+                shx_header = bytearray(100)
+
+                # File code (9994)
+                struct.pack_into('>I', shx_header, 0, 9994)
+                # File length (50 + number of records * 4)
+                struct.pack_into('>I', shx_header, 24, 50)  # Minimal size
+                # Version (1000)
+                struct.pack_into('<I', shx_header, 28, 1000)
+                # Shape type (from SHP file)
+                shp_file.seek(32)
+                shape_type = struct.unpack('<I', shp_file.read(4))[0]
+                struct.pack_into('<I', shx_header, 32, shape_type)
+
+                shx_file.write(shx_header)
+
+        # Now try to load with the created .shx
+        return gpd.read_file(shp_path)
+
+    except Exception:
+        # If SHX creation fails, try loading as a different format or with fiona directly
+        import fiona
+        try:
+            # Use fiona directly which might be more tolerant
+            with fiona.open(shp_path) as src:
+                features = list(src)
+                crs = src.crs
+
+            # Convert to GeoDataFrame
+            import geopandas as gpd
+            gdf = gpd.GeoDataFrame.from_features(features, crs=crs)
+
+            import streamlit as st
+            st.warning("⚠️ Loaded shapefile using alternative method. Some features may be missing.")
+
+            return gdf
+
+        except Exception:
+            raise Exception("Could not load or repair shapefile. Please upload a complete shapefile package.")
+
+
+def main():
+    """Main Streamlit application entry point"""
+    
+    # Page navigation in sidebar
+    st.sidebar.title("🚗 Navigation")
+    
+    # Initialize current page in session state if not exists
+    if 'current_page' not in st.session_state:
+        st.session_state.current_page = "🔍 Dataset Control"
+    
+    # Use radio buttons instead of selectbox to avoid double-click issues
+    pages = ["🔍 Dataset Control", "🏠 Main Processing", "📊 Results", "🗺️ Maps", "📚 Methodology", "🔬 Control Methodology", "📋 Schema Documentation"]
+    
+    # Get current page for radio button selection
+    current_page = st.session_state.current_page
+    current_index = pages.index(current_page) if current_page in pages else 0
+    
+    # Use radio buttons for navigation
+    selected_page = st.sidebar.radio(
+        "Choose a page:",
+        pages,
+        index=current_index,
+        key="page_radio"
+    )
+    
+    # Update session state only if page actually changed
+    if selected_page != st.session_state.current_page:
+        st.session_state.current_page = selected_page
+        # Clear the "just completed processing" flag when navigating away from results
+        if 'just_completed_processing' in st.session_state:
+            del st.session_state.just_completed_processing
+        st.rerun()
+    
+    # Use the current page from session state (not the selected page) to avoid conflicts
+    page = st.session_state.current_page
+    
+    if page == "🏠 Main Processing":
+        main_processing_page()
+    elif page == "🗺️ Maps":
+        maps_page()
+    elif page == "📊 Results":
+        results_page()
+    elif page == "🔍 Dataset Control":
+        control_page()
+    elif page == "📚 Methodology":
+        methodology_page()
+    elif page == "🔬 Control Methodology":
+        control_methodology_page()
+    elif page == "📋 Schema Documentation":
+        schema_documentation_page()
+
+
+def maps_page():
+    """Maps visualization page"""
+    try:
+        render_maps_page()
+    except Exception as e:
+        st.error(f"❌ Error in main maps page: {e}")
+        st.info("🔧 Error details:")
+        import traceback
+        st.code(traceback.format_exc())
+        st.info("💡 Try refreshing the page or check the data files.")
+
+
+def main_processing_page():
+    """Main processing page"""
+    st.title("Google Maps Link Monitoring CSV Processor")
+    st.markdown("Process large-scale traffic monitoring datasets with configurable parameters")
+    
+    # Sidebar now only contains navigation - methodology moved to dedicated page
+    
+    # Main application layout
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.header("Configuration")
+        
+        # File Input Section
+        st.subheader("📁 File Input")
+        uploaded_file = st.file_uploader(
+            "Upload CSV file containing Google Maps link monitoring data",
+            type=['csv'],
+            help="Select a CSV file with the required columns: DataID, Name, SegmentID, RouteAlternative, RequestedTime, Timestamp, DayInWeek, DayType, Duration, Distance, Speed, Url, Polyline"
+        )
+        
+        # Output Directory Section
+        st.subheader("📂 Output Directory")
+        output_dir = st.text_input(
+            "Output directory path",
+            value="./output",
+            help="Directory where processed files will be saved. Will be created if it doesn't exist."
+        )
+        
+        # Basic Parameters Section
+        st.subheader("⚙️ Basic Parameters")
+        
+        # Chunk size for memory management
+        chunk_size = st.number_input(
+            "Chunk size for CSV reading",
+            min_value=1000,
+            max_value=1000000,
+            value=50000,
+            step=10000,
+            help="Number of rows to process at once. Larger values use more memory but may be faster."
+        )
+        
+        # Minimum valid rows per hour
+        min_valid_per_hour = st.number_input(
+            "Minimum valid rows per hour",
+            min_value=1,
+            max_value=100,
+            value=1,
+            help="""
+            **Data Quality Threshold:** Minimum number of valid data points required for an hour to be considered reliable.
+            
+            **How it works:**
+            - Each hour is grouped by link and time
+            - Only hours with at least this many valid measurements are included in weekly profiles
+            - Hours below this threshold are marked as invalid and excluded from analysis
+            
+            **Examples for different data frequencies:**
+            - **15-minute data (4 per hour):** Value = 1-3 (since max possible is 4)
+            - **5-minute data (12 per hour):** Value = 3-8 
+            - **1-minute data (60 per hour):** Value = 10-30
+            
+            **For your 15-minute data:**
+            - Value = 1: Include hours with at least 1 measurement (very lenient)
+            - Value = 2: Include hours with at least 2 measurements (balanced)
+            - Value = 3: Include hours with at least 3 measurements (strict, requires 75% coverage)
+            - Value = 4: Include hours with all 4 measurements (perfect coverage only)
+            
+            **Recommendation:** For 15-minute data, use 1-2 for good coverage, 3-4 for high quality only.
+            """
+        )
+        
+        # Timestamp and Timezone Configuration
+        st.subheader("🕐 Timestamp Configuration")
+        
+        col_tz, col_fmt = st.columns(2)
+        
+        with col_tz:
+            timezone = st.selectbox(
+                "Timezone",
+                options=[
+                    "Asia/Jerusalem", "UTC", "Europe/London", "Europe/Paris", 
+                    "America/New_York", "America/Los_Angeles", "Asia/Tokyo"
+                ],
+                index=0,  # Default to Asia/Jerusalem
+                help="Timezone for timestamp parsing. Naive timestamps will be localized to this timezone."
+            )
+        
+        with col_fmt:
+            timestamp_format = st.text_input(
+                "Timestamp format",
+                value="%Y-%m-%d %H:%M:%S",
+                help="Python strptime format for parsing timestamps. The system automatically tries common formats like DD/MM/YYYY HH:MM, YYYY-MM-DD HH:MM:SS, etc. Only specify if you have an unusual format."
+            )
+        
+        # Date Range Configuration
+        if 'auto_detected_dates' in st.session_state:
+            st.subheader("📅 Date Range Filters ✨ Auto-detected")
+        else:
+            st.subheader("📅 Date Range Filters")
+        
+        col_start, col_end = st.columns(2)
+        
+        # Use detected dates as defaults if available
+        default_start = None
+        default_end = None
+        if 'auto_detected_dates' in st.session_state:
+            default_start = st.session_state.auto_detected_dates['start']
+            default_end = st.session_state.auto_detected_dates['end']
+            
+            # Add option to clear auto-detected dates
+            col_info, col_reset = st.columns([3, 1])
+            with col_info:
+                st.caption(f"📅 Using auto-detected range: {default_start} to {default_end}")
+            with col_reset:
+                if st.button("🗑️ Clear", help="Clear auto-detected dates to set custom range"):
+                    del st.session_state.auto_detected_dates
+                    st.rerun()
+        
+        with col_start:
+            # Use default_start if available, otherwise use today's date as fallback
+            start_value = default_start if default_start is not None else date.today()
+            start_date = st.date_input(
+                "Start date (inclusive)",
+                value=start_value,
+                key="start_date_input",
+                help="Filter data from this date onwards. Leave empty to include all dates from the beginning."
+            )
+            # If no auto-detected date and user hasn't changed from today, treat as None
+            if default_start is None and start_date == date.today():
+                start_date = None
+        
+        with col_end:
+            # Use default_end if available, otherwise use today's date as fallback  
+            end_value = default_end if default_end is not None else date.today()
+            end_date = st.date_input(
+                "End date (inclusive)", 
+                value=end_value,
+                key="end_date_input",
+                help="Filter data up to this date. Leave empty to include all dates to the end."
+            )
+            # If no auto-detected date and user hasn't changed from today, treat as None
+            if default_end is None and end_date == date.today():
+                end_date = None
+        
+        # Validate date range
+        if start_date and end_date and start_date > end_date:
+            st.error("❌ Start date must be before or equal to end date")
+        
+        # Time Filters Configuration
+        st.subheader("⏰ Time Filters")
+        
+        # Weekday selection
+        weekday_options = [
+            ("Monday", 0), ("Tuesday", 1), ("Wednesday", 2), ("Thursday", 3),
+            ("Friday", 4), ("Saturday", 5), ("Sunday", 6)
+        ]
+        
+        selected_weekdays = st.multiselect(
+            "Include weekdays",
+            options=[opt[1] for opt in weekday_options],
+            default=[0, 1, 2, 3, 4, 5, 6],  # Default to all days
+            format_func=lambda x: next(opt[0] for opt in weekday_options if opt[1] == x),
+            help="Select which days of the week to include in processing. Monday=0, Sunday=6."
+        )
+        
+        # Hour selection
+        hour_options = list(range(24))
+        selected_hours = st.multiselect(
+            "Include hours (0-23)",
+            options=hour_options,
+            default=hour_options,  # Default to all hours
+            format_func=lambda x: f"{x:02d}:00",
+            help="Select which hours of the day to include in processing. 0=midnight, 23=11PM."
+        )
+        
+        # Advanced Configuration
+        st.subheader("🔧 Advanced Configuration")
+        
+        # Day Type Mapping
+        with st.expander("Day Type Mapping", expanded=False):
+            st.markdown("Map raw DayType values from CSV to standard categories:")
+            
+            col_dt1, col_dt2, col_dt3 = st.columns(3)
+            
+            with col_dt1:
+                weekday_mapping = st.text_area(
+                    "Weekday values (one per line)",
+                    value="יום חול\nחול\nweekday",
+                    help="DayType values that should be classified as weekdays"
+                )
+            
+            with col_dt2:
+                weekend_mapping = st.text_area(
+                    "Weekend values (one per line)",
+                    value="סוף שבוע\nשבת\nweekend",
+                    help="DayType values that should be classified as weekends"
+                )
+            
+            with col_dt3:
+                holiday_mapping = st.text_area(
+                    "Holiday values (one per line)",
+                    value="חג\nholiday",
+                    help="DayType values that should be classified as holidays"
+                )
+        
+        # Holiday Processing
+        with st.expander("Holiday Processing", expanded=False):
+            use_holidays = st.checkbox(
+                "Enable automatic holiday detection",
+                value=True,
+                help="Use Python holidays library to automatically detect Israeli holidays"
+            )
+            
+            if use_holidays:
+                holidays_treatment = st.radio(
+                    "Treat holidays as:",
+                    options=["weekend", "holiday"],
+                    index=1,
+                    help="How to categorize automatically detected holidays"
+                )
+                
+                custom_holidays_file = st.file_uploader(
+                    "Custom holidays file (optional)",
+                    type=['txt', 'ics'],
+                    help="Upload a text file with ISO dates (YYYY-MM-DD) or ICS calendar file to override automatic detection"
+                )
+            else:
+                holidays_treatment = "weekend"
+                custom_holidays_file = None
+        
+        # Data Validation Ranges
+        with st.expander("Data Validation Ranges", expanded=False):
+            st.markdown("Set acceptable ranges for numeric validation:")
+            
+            col_dur, col_dist, col_speed = st.columns(3)
+            
+            with col_dur:
+                duration_min = st.number_input("Min duration (seconds)", value=0, min_value=0)
+                duration_max = st.number_input("Max duration (seconds)", value=7200, min_value=1)
+            
+            with col_dist:
+                distance_min = st.number_input("Min distance (meters)", value=0, min_value=0)
+                distance_max = st.number_input("Max distance (meters)", value=50000, min_value=1)
+            
+            with col_speed:
+                speed_min = st.number_input("Min speed (km/h)", value=0, min_value=0)
+                speed_max = st.number_input("Max speed (km/h)", value=200, min_value=1)
+        
+        # Valid Codes and Link Filters
+        with st.expander("Data Filtering Options", expanded=False):
+            valid_codes = st.text_input(
+                "Valid codes (comma-separated)",
+                value="OK,VALID,1",
+                help="When using valid_code column, only these codes will be considered valid"
+            )
+            
+            col_wl, col_bl = st.columns(2)
+            
+            with col_wl:
+                link_whitelist = st.text_area(
+                    "Link whitelist (one per line)",
+                    value="",
+                    help="If specified, only process these link IDs. Leave empty to process all links."
+                )
+            
+            with col_bl:
+                link_blacklist = st.text_area(
+                    "Link blacklist (one per line)", 
+                    value="",
+                    help="Exclude these link IDs from processing. Applied after whitelist."
+                )
+        
+        # Processing Options
+        with st.expander("Processing Options", expanded=False):
+            col_opt1, col_opt2 = st.columns(2)
+            
+            with col_opt1:
+                weekly_grouping = st.radio(
+                    "Weekly profile grouping",
+                    options=["daytype", "weekday_index"],
+                    index=0,
+                    help="Group weekly profiles by daytype categories or individual weekday indices"
+                )
+                
+                recompute_std = st.checkbox(
+                    "Recompute standard deviation from raw data",
+                    value=False,
+                    help="If checked, compute stddur from pooled raw data. Otherwise use mean of hourly std values."
+                )
+            
+            with col_opt2:
+                generate_quality_reports = st.checkbox(
+                    "Generate quality reports",
+                    value=True,
+                    help="Create quality_by_link.csv and invalid_reason_counts.csv files"
+                )
+                
+                output_parquet = st.checkbox(
+                    "Output Parquet files",
+                    value=False,
+                    help="Save intermediate results as Parquet files for faster downstream processing"
+                )
+        
+        # Store all configuration in session state
+        if 'full_config' not in st.session_state:
+            st.session_state.full_config = {}
+        
+        # Parse text inputs into lists
+        weekday_values = [line.strip() for line in weekday_mapping.split('\n') if line.strip()]
+        weekend_values = [line.strip() for line in weekend_mapping.split('\n') if line.strip()]
+        holiday_values = [line.strip() for line in holiday_mapping.split('\n') if line.strip()]
+        valid_codes_list = [code.strip() for code in valid_codes.split(',') if code.strip()]
+        whitelist_links = [link.strip() for link in link_whitelist.split('\n') if link.strip()]
+        blacklist_links = [link.strip() for link in link_blacklist.split('\n') if link.strip()]
+        
+        st.session_state.full_config.update({
+            'uploaded_file': uploaded_file,
+            'output_dir': output_dir,
+            'chunk_size': chunk_size,
+            'min_valid_per_hour': min_valid_per_hour,
+            'timezone': timezone,
+            'timestamp_format': timestamp_format,
+            'start_date': start_date,
+            'end_date': end_date,
+            'selected_weekdays': selected_weekdays,
+            'selected_hours': selected_hours,
+            'daytype_mapping': {
+                'weekday': weekday_values,
+                'weekend': weekend_values,
+                'holiday': holiday_values
+            },
+            'use_holidays': use_holidays,
+            'holidays_treatment': holidays_treatment,
+            'custom_holidays_file': custom_holidays_file,
+            'duration_range': (duration_min, duration_max),
+            'distance_range': (distance_min, distance_max),
+            'speed_range': (speed_min, speed_max),
+            'valid_codes': valid_codes_list,
+            'link_whitelist': whitelist_links,
+            'link_blacklist': blacklist_links,
+            'weekly_grouping': weekly_grouping,
+            'recompute_std': recompute_std,
+            'generate_quality_reports': generate_quality_reports,
+            'output_parquet': output_parquet
+        })
+        
+        # Show configuration summary
+        if len(selected_weekdays) == 0:
+            st.warning("⚠️ No weekdays selected - no data will be processed")
+        elif len(selected_hours) == 0:
+            st.warning("⚠️ No hours selected - no data will be processed")
+        else:
+            weekday_names = [next(opt[0] for opt in weekday_options if opt[1] == wd) for wd in selected_weekdays]
+            st.info(f"📊 Will process {len(selected_weekdays)} weekdays ({', '.join(weekday_names)}) and {len(selected_hours)} hours")
+            
+            # Debug information
+            with st.expander("🔍 Debug Information", expanded=False):
+                st.write("**Selected Parameters:**")
+                st.write(f"- Weekdays: {selected_weekdays}")
+                st.write(f"- Hours: {len(selected_hours)} hours (0-{max(selected_hours) if selected_hours else 'none'})")
+                st.write(f"- Min valid per hour: {min_valid_per_hour}")
+                st.write(f"- Date range: {start_date} to {end_date}")
+                st.write(f"- Timezone: {timezone}")
+                st.write(f"- Timestamp format: {timestamp_format}")
+        
+        # Show file validation status and auto-detect date range
+        if uploaded_file is not None:
+            st.success(f"✅ File uploaded: {uploaded_file.name} ({uploaded_file.size:,} bytes)")
+            
+            # Basic file validation and date range detection
+            try:
+                # Read sample to validate columns and detect date range
+                # First detect encoding, then read with proper encoding
+                from components.processing.pipeline import detect_file_encoding
+                
+                # Save uploaded file temporarily to detect encoding
+                temp_file_path = save_uploaded_file(uploaded_file)
+                try:
+                    detected_encoding = detect_file_encoding(temp_file_path)
+                    sample_df = pd.read_csv(temp_file_path, nrows=1000, encoding=detected_encoding)
+                finally:
+                    # Clean up temp file
+                    Path(temp_file_path).unlink(missing_ok=True)
+                    # Reset file pointer for later use
+                    uploaded_file.seek(0)
+                # Use the proper validation function from processing.py
+                from components.processing.pipeline import validate_csv_columns
+                is_valid, missing_columns = validate_csv_columns(sample_df)
+                
+                if not is_valid:
+                    st.error(f"❌ Missing required columns: {', '.join(missing_columns)}")
+                    st.info("💡 **Tip**: The system supports flexible column names. For example:")
+                    st.info("• `Duration (seconds)` is accepted for `Duration`")
+                    st.info("• `Distance (meters)` is accepted for `Distance`") 
+                    st.info("• `Speed (km/h)` is accepted for `Speed`")
+                else:
+                    st.success("✅ All required columns found")
+                    
+                    # Auto-detect date range from the file
+                    if 'Timestamp' in sample_df.columns:
+                        try:
+                            # Clean timestamp strings first
+                            cleaned_timestamps = sample_df['Timestamp'].astype(str).str.strip()
+                            
+                            # Try multiple timestamp formats for better compatibility
+                            timestamp_formats = [
+                                timestamp_format,  # User-specified format
+                                '%d/%m/%Y %H:%M',  # European format DD/MM/YYYY HH:MM (common)
+                                '%Y-%m-%d %H:%M:%S',  # Default format YYYY-MM-DD HH:MM:SS
+                                '%d/%m/%Y %H:%M:%S',  # European format DD/MM/YYYY HH:MM:SS
+                                '%m/%d/%Y %H:%M',  # US format MM/DD/YYYY HH:MM
+                                '%m/%d/%Y %H:%M:%S',  # US format MM/DD/YYYY HH:MM:SS
+                                '%Y-%m-%d %H:%M',  # ISO format without seconds
+                                '%Y-%m-%d %H:%M:%S.%f',  # With microseconds
+                                '%d-%m-%Y %H:%M:%S',  # European with dashes
+                                '%d-%m-%Y %H:%M',  # European with dashes, no seconds
+                            ]
+                            
+                            timestamps = None
+                            successful_format = None
+                            for fmt in timestamp_formats:
+                                try:
+                                    timestamps = pd.to_datetime(cleaned_timestamps, format=fmt, errors='coerce')
+                                    success_rate = (len(timestamps) - timestamps.isna().sum()) / len(timestamps)
+                                    if success_rate > 0.5:  # At least 50% success rate
+                                        successful_format = fmt
+                                        break
+                                except:
+                                    continue
+                            
+                            # Fallback to automatic parsing
+                            if timestamps is None or timestamps.isna().all():
+                                timestamps = pd.to_datetime(cleaned_timestamps, errors='coerce')
+                                successful_format = "automatic"
+                            
+                            valid_timestamps = timestamps.dropna()
+                            
+                            # Filter out unrealistic dates (likely test/placeholder data)
+                            current_year = pd.Timestamp.now().year
+                            realistic_timestamps = valid_timestamps[
+                                (valid_timestamps.dt.year >= current_year - 10) & 
+                                (valid_timestamps.dt.year <= current_year + 10)
+                            ]
+                            
+                            # Use realistic timestamps if available, otherwise use all valid timestamps
+                            timestamps_to_use = realistic_timestamps if not realistic_timestamps.empty else valid_timestamps
+                            
+                            if not timestamps_to_use.empty:
+                                file_start_date = timestamps_to_use.min().date()
+                                file_end_date = timestamps_to_use.max().date()
+                                
+                                                # Always update session state with detected dates (auto-update)
+                                new_dates = {
+                                    'start': file_start_date,
+                                    'end': file_end_date
+                                }
+                                
+                                # Only update and rerun if dates have changed
+                                if ('auto_detected_dates' not in st.session_state or 
+                                    st.session_state.auto_detected_dates != new_dates):
+                                    st.session_state.auto_detected_dates = new_dates
+                                    # Clear the date input widget states to force refresh
+                                    for key in ['start_date_input', 'end_date_input']:
+                                        if key in st.session_state:
+                                            del st.session_state[key]
+                                    st.rerun()
+                                
+                                st.success(f"📅 **Auto-detected date range:** {file_start_date} to {file_end_date}")
+                                if successful_format and successful_format != timestamp_format:
+                                    st.info(f"🔍 **Auto-detected timestamp format:** `{successful_format}` (different from your setting)")
+                                    st.caption("The system automatically detected and used the correct format for your data")
+                                elif successful_format:
+                                    st.caption(f"Date range filters have been automatically set to match your data (format: {successful_format})")
+                                else:
+                                    st.caption("Date range filters have been automatically set to match your data")
+                                
+                                # Suggest optimal min_valid_per_hour based on data frequency
+                                total_rows = len(sample_df)
+                                unique_hours = len(valid_timestamps.dt.floor('H').unique()) if not valid_timestamps.empty else 1
+                                avg_rows_per_hour = total_rows / unique_hours if unique_hours > 0 else 1
+                                
+                                # Determine data frequency and suggest appropriate threshold
+                                if avg_rows_per_hour >= 50:
+                                    suggested_min = 10
+                                    frequency = "1-minute data"
+                                elif avg_rows_per_hour >= 10:
+                                    suggested_min = 5
+                                    frequency = "5-minute data"
+                                elif avg_rows_per_hour >= 3:
+                                    suggested_min = 2
+                                    frequency = "15-minute data"
+                                elif avg_rows_per_hour >= 1:
+                                    suggested_min = 1
+                                    frequency = "hourly or sparse data"
+                                else:
+                                    suggested_min = 1
+                                    frequency = "very sparse data"
+                                
+                                st.info(f"💡 **Suggested minimum valid rows per hour:** {suggested_min}")
+                                st.caption(f"Detected {frequency} (~{avg_rows_per_hour:.1f} rows/hour)")
+                                    
+                        except Exception as date_error:
+                            st.warning(f"⚠️ Could not detect date range: {date_error}")
+                            # Clear any previous auto-detected dates on error
+                            if 'auto_detected_dates' in st.session_state:
+                                del st.session_state.auto_detected_dates
+                    
+            except Exception as e:
+                st.error(f"❌ Error reading file: {str(e)}")
+        else:
+            st.info("Please upload a CSV file to begin")
+            # Clear auto-detected dates when no file is uploaded
+            if 'auto_detected_dates' in st.session_state:
+                del st.session_state.auto_detected_dates
+        
+    with col2:
+        st.header("Results")
+        
+        # Run Processing Button
+        can_run = (uploaded_file is not None and 
+                  len(selected_weekdays) > 0 and 
+                  len(selected_hours) > 0 and
+                  (not start_date or not end_date or start_date <= end_date))
+        
+        if st.button("🚀 Run Processing", disabled=not can_run, use_container_width=True):
+            if can_run:
+                run_processing()
+            else:
+                st.error("Please fix configuration issues before running")
+        
+        if not can_run:
+            st.warning("⚠️ Please upload a file and configure valid parameters to run processing")
+        
+        # Results are now displayed on the separate Results page
+
+
+# Sidebar methodology content removed - now available on dedicated Methodology page
+
+
+def run_processing():
+    """Execute the processing pipeline with configured parameters"""
+    try:
+        # Show processing status with progress information
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        try:
+            # Get configuration from session state
+            config = st.session_state.full_config
+            
+            status_text.text("🔧 Preparing processing parameters...")
+            progress_bar.progress(10)
+            
+            # Prepare parameters for processing pipeline
+            params = prepare_processing_parameters(config)
+            
+            status_text.text("💾 Saving uploaded file...")
+            progress_bar.progress(20)
+            
+            # Save uploaded file temporarily
+            temp_file_path = save_uploaded_file(config['uploaded_file'])
+            params['input_file_path'] = temp_file_path
+            
+            status_text.text("📊 Getting input data preview...")
+            progress_bar.progress(30)
+            
+            # Get a sample of parsed input for preview
+            parsed_input_sample = get_parsed_input_sample(config['uploaded_file'], params)
+            
+            status_text.text("🚀 Running processing pipeline... This may take a few minutes for large files.")
+            progress_bar.progress(40)
+            
+            # Run the processing pipeline
+            hourly_df, weekly_df, output_files = run_pipeline(params)
+            
+            status_text.text("✅ Processing completed successfully!")
+            progress_bar.progress(100)
+            
+            # Store results in session state
+            st.session_state.processing_results = {
+                'hourly_df': hourly_df,
+                'weekly_df': weekly_df,
+                'output_files': output_files,
+                'parsed_input_sample': parsed_input_sample,
+                'params': params,
+                'success': True,
+                'error_message': None
+            }
+            
+            # Automatically navigate to Results page
+            st.session_state.current_page = "📊 Results"
+            
+            # Clean up temporary file
+            Path(temp_file_path).unlink(missing_ok=True)
+            
+        except Exception as e:
+            # Clean up temporary file on error
+            if 'temp_file_path' in locals():
+                Path(temp_file_path).unlink(missing_ok=True)
+            raise e
+            
+        # Store results in session state for the Results page
+        st.session_state.processing_results = (hourly_df, weekly_df, output_files)
+        
+        # Automatically navigate to Results page
+        st.session_state.current_page = "📊 Results"
+        
+        st.success("✅ Processing completed successfully!")
+        st.info("🎉 **Automatically navigating to Results page...**")
+        st.rerun()
+        
+    except Exception as e:
+        # Store error in session state
+        st.session_state.processing_results = {
+            'hourly_df': pd.DataFrame(),
+            'weekly_df': pd.DataFrame(),
+            'output_files': {},
+            'params': {},
+            'success': False,
+            'error_message': str(e)
+        }
+        
+        st.error(f"❌ Processing failed: {str(e)}")
+        
+        # Show detailed error information in expander
+        with st.expander("Error Details", expanded=False):
+            st.code(str(e))
+            st.markdown("**Troubleshooting Tips:**")
+            
+            # Provide specific guidance based on error type
+            error_str = str(e).lower()
+            if "column" in error_str or "missing" in error_str:
+                st.markdown("🔍 **Column Issues:**")
+                st.markdown("- Verify your CSV has all required columns: DataID, Name, SegmentID, RouteAlternative, RequestedTime, Timestamp, DayInWeek, DayType, Duration, Distance, Speed, Url, Polyline")
+                st.markdown("- Check for extra spaces or different column names")
+                st.markdown("- Ensure column headers are in the first row")
+            
+            elif "timestamp" in error_str or "datetime" in error_str:
+                st.markdown("📅 **Timestamp Issues:**")
+                st.markdown("- Verify timestamp format matches your data (default: %Y-%m-%d %H:%M:%S)")
+                st.markdown("- Check for missing or malformed timestamp values")
+                st.markdown("- Ensure timezone setting is appropriate for your data")
+            
+            elif "memory" in error_str or "size" in error_str:
+                st.markdown("💾 **Memory Issues:**")
+                st.markdown("- Try reducing chunk size (current: {})".format(st.session_state.full_config.get('chunk_size', 50000)))
+                st.markdown("- Close other applications to free up memory")
+                st.markdown("- Consider processing smaller date ranges")
+            
+            elif "file" in error_str or "path" in error_str:
+                st.markdown("📁 **File Issues:**")
+                st.markdown("- Ensure the uploaded file is a valid CSV")
+                st.markdown("- Check that the output directory is writable")
+                st.markdown("- Verify file is not corrupted or empty")
+            
+            else:
+                st.markdown("🔧 **General Troubleshooting:**")
+                st.markdown("- Check that your CSV file has all required columns")
+                st.markdown("- Verify timestamp format matches your data")
+                st.markdown("- Ensure date ranges are valid")
+                st.markdown("- Try reducing chunk size if memory issues occur")
+                st.markdown("- Check the processing log for more details")
+
+
+def prepare_processing_parameters(config: dict) -> dict:
+    """Convert GUI configuration to processing pipeline parameters"""
+    params = {
+        'output_dir': config['output_dir'],
+        'chunk_size': config['chunk_size'],
+        'min_valid_per_hour': config['min_valid_per_hour'],
+        'timezone': config['timezone'],
+        'timestamp_format': config['timestamp_format'],
+        'start_date': config['start_date'],
+        'end_date': config['end_date'],
+        'weekday_include': config['selected_weekdays'],
+        'hours_include': config['selected_hours'],
+        'daytype_mapping': config['daytype_mapping'],
+        'use_holidays': config['use_holidays'],
+        'holidays_treatment': config['holidays_treatment'],
+        'duration_range_sec': config['duration_range'],
+        'distance_range_m': config['distance_range'],
+        'speed_range_kmh': config['speed_range'],
+        'valid_codes_ok': config['valid_codes'],
+        'whitelist_links': config['link_whitelist'] if config['link_whitelist'] else None,
+        'blacklist_links': config['link_blacklist'] if config['link_blacklist'] else None,
+        'weekly_grouping': config['weekly_grouping'],
+        'recompute_std_from_raw': config['recompute_std'],
+        'generate_quality_reports': config['generate_quality_reports'],
+        'output_parquet': config['output_parquet']
+    }
+    
+    # Handle custom holidays file if provided
+    if config['custom_holidays_file'] is not None:
+        # Save custom holidays file temporarily
+        custom_holidays_path = Path(config['output_dir']) / 'custom_holidays.txt'
+        Path(config['output_dir']).mkdir(parents=True, exist_ok=True)
+        
+        with open(custom_holidays_path, 'wb') as f:
+            f.write(config['custom_holidays_file'].getvalue())
+        
+        params['custom_holidays_file'] = str(custom_holidays_path)
+    else:
+        params['custom_holidays_file'] = None
+    
+    return params
+
+
+def get_parsed_input_sample(uploaded_file, params: dict) -> pd.DataFrame:
+    """Get a sample of parsed input data for preview"""
+    try:
+        # Reset file pointer
+        uploaded_file.seek(0)
+        
+        # Read a small sample (first 100 rows) for preview
+        # Save uploaded file temporarily to detect encoding
+        temp_file_path = save_uploaded_file(uploaded_file)
+        try:
+            from components.processing.pipeline import detect_file_encoding
+            detected_encoding = detect_file_encoding(temp_file_path)
+            sample_df = pd.read_csv(temp_file_path, nrows=100, encoding=detected_encoding)
+        finally:
+            # Clean up temp file
+            Path(temp_file_path).unlink(missing_ok=True)
+        
+        # Apply basic column normalization like the processing pipeline does
+        from components.processing.pipeline import normalize_column_names, validate_csv_columns
+        
+        # Validate columns
+        is_valid, missing_cols = validate_csv_columns(sample_df)
+        if not is_valid:
+            return pd.DataFrame()  # Return empty if validation fails
+        
+        # Normalize column names
+        sample_df = normalize_column_names(sample_df)
+        
+        # Reset file pointer for later use
+        uploaded_file.seek(0)
+        
+        return sample_df
+        
+    except Exception as e:
+        # Return empty DataFrame on error
+        return pd.DataFrame()
+
+
+def save_uploaded_file(uploaded_file) -> str:
+    """Save uploaded file to temporary location and return path"""
+    import tempfile
+    import os
+    
+    # Create temporary file
+    temp_fd, temp_path = tempfile.mkstemp(suffix='.csv', prefix='maps_data_')
+    
+    try:
+        # Write uploaded file content to temporary file as binary to preserve encoding
+        with os.fdopen(temp_fd, 'wb') as tmp_file:
+            tmp_file.write(uploaded_file.getvalue())
+        
+        return temp_path
+    except Exception as e:
+        # Clean up on error
+        try:
+            os.close(temp_fd)
+        except:
+            pass
+        Path(temp_path).unlink(missing_ok=True)
+        raise e
+
+
+def display_processing_results():
+    """Display processing results with preview tables and download links"""
+    results = st.session_state.processing_results
+    
+    if not results['success']:
+        st.error(f"❌ Processing failed: {results['error_message']}")
+        return
+    
+    hourly_df = results['hourly_df']
+    weekly_df = results['weekly_df']
+    output_files = results['output_files']
+    
+    # Show summary statistics
+    st.subheader("📊 Processing Summary")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Hourly Records", f"{len(hourly_df):,}")
+    
+    with col2:
+        st.metric("Weekly Patterns", f"{len(weekly_df):,}")
+    
+    with col3:
+        st.metric("Output Files", len(output_files))
+    
+    # Display preview tables
+    st.subheader("📋 Data Previews")
+    
+    # Show parsed input preview if available
+    if 'parsed_input_sample' in results:
+        parsed_sample = results['parsed_input_sample']
+        if not parsed_sample.empty:
+            with st.expander("Parsed Input Preview", expanded=False):
+                st.markdown(f"**Shape:** Sample of parsed input data")
+                st.dataframe(parsed_sample.head(10), use_container_width=True)
+    
+    # Hourly aggregation preview
+    if not hourly_df.empty:
+        with st.expander("Hourly Aggregation Preview", expanded=True):
+            st.markdown(f"**Shape:** {hourly_df.shape[0]:,} rows × {hourly_df.shape[1]} columns")
+            
+            # Show data types and basic info
+            col_info, col_preview = st.columns([1, 2])
+            
+            with col_info:
+                st.markdown("**Column Info:**")
+                info_df = pd.DataFrame({
+                    'Column': hourly_df.columns,
+                    'Type': [str(dtype) for dtype in hourly_df.dtypes],
+                    'Non-Null': [f"{hourly_df[col].notna().sum():,}" for col in hourly_df.columns]
+                })
+                st.dataframe(info_df, use_container_width=True, hide_index=True)
+            
+            with col_preview:
+                st.markdown("**Sample Data:**")
+                # Sort hourly data for preview
+                hourly_preview = hourly_df.copy()
+                
+                # Ensure proper data types for sorting
+                if 'date' in hourly_preview.columns and hourly_preview['date'].dtype == 'object':
+                    try:
+                        hourly_preview['date'] = pd.to_datetime(hourly_preview['date'])
+                    except:
+                        pass
+                if 'hour_of_day' in hourly_preview.columns:
+                    hourly_preview['hour_of_day'] = pd.to_numeric(hourly_preview['hour_of_day'], errors='coerce')
+                
+                sort_columns = []
+                if 'link_id' in hourly_preview.columns:
+                    sort_columns.append('link_id')
+                if 'date' in hourly_preview.columns:
+                    sort_columns.append('date')
+                if 'hour_of_day' in hourly_preview.columns:
+                    sort_columns.append('hour_of_day')
+                
+                if sort_columns:
+                    hourly_preview = hourly_preview.sort_values(sort_columns, na_position='last')
+                    hourly_preview = hourly_preview.reset_index(drop=True)
+                
+                st.dataframe(hourly_preview.head(25), use_container_width=True, height=300)
+    
+    # Weekly profile preview
+    if not weekly_df.empty:
+        with st.expander("Weekly Profile Preview", expanded=True):
+            st.markdown(f"**Shape:** {weekly_df.shape[0]:,} rows × {weekly_df.shape[1]} columns")
+            
+            # Show data types and basic info
+            col_info, col_preview = st.columns([1, 2])
+            
+            with col_info:
+                st.markdown("**Column Info:**")
+                info_df = pd.DataFrame({
+                    'Column': weekly_df.columns,
+                    'Type': [str(dtype) for dtype in weekly_df.dtypes],
+                    'Non-Null': [f"{weekly_df[col].notna().sum():,}" for col in weekly_df.columns]
+                })
+                st.dataframe(info_df, use_container_width=True, hide_index=True)
+            
+            with col_preview:
+                st.markdown("**Sample Data:**")
+                # Sort weekly data for preview
+                weekly_preview = weekly_df.copy()
+                
+                # Ensure proper data types for sorting
+                if 'hour_of_day' in weekly_preview.columns:
+                    weekly_preview['hour_of_day'] = pd.to_numeric(weekly_preview['hour_of_day'], errors='coerce')
+                
+                sort_columns = []
+                if 'link_id' in weekly_preview.columns:
+                    sort_columns.append('link_id')
+                if 'daytype' in weekly_preview.columns:
+                    sort_columns.append('daytype')
+                if 'hour_of_day' in weekly_preview.columns:
+                    sort_columns.append('hour_of_day')
+                
+                if sort_columns:
+                    weekly_preview = weekly_preview.sort_values(sort_columns, na_position='last')
+                    weekly_preview = weekly_preview.reset_index(drop=True)
+                
+                st.dataframe(weekly_preview.head(25), use_container_width=True, height=300)
+    
+    # Download section
+    st.subheader("📥 Download Results")
+    
+    if output_files:
+        # Create download buttons for each output file
+        download_cols = st.columns(min(3, len(output_files)))
+        
+        for i, (file_type, file_path) in enumerate(output_files.items()):
+            col_idx = i % 3
+            
+            with download_cols[col_idx]:
+                if Path(file_path).exists():
+                    with open(file_path, 'rb') as f:
+                        file_data = f.read()
+                    
+                    # Determine file extension and MIME type
+                    file_ext = Path(file_path).suffix.lower()
+                    if file_ext == '.csv':
+                        mime_type = 'text/csv'
+                    elif file_ext == '.json':
+                        mime_type = 'application/json'
+                    elif file_ext == '.txt':
+                        mime_type = 'text/plain'
+                    elif file_ext == '.parquet':
+                        mime_type = 'application/octet-stream'
+                    else:
+                        mime_type = 'application/octet-stream'
+                    
+                    # Create download button
+                    st.download_button(
+                        label=f"📄 {file_type.replace('_', ' ').title()}",
+                        data=file_data,
+                        file_name=Path(file_path).name,
+                        mime=mime_type,
+                        use_container_width=True
+                    )
+                else:
+                    st.error(f"❌ File not found: {file_type}")
+    
+    # Show processing log if available
+    if 'processing_log' in output_files:
+        log_path = output_files['processing_log']
+        if Path(log_path).exists():
+            with st.expander("Processing Log", expanded=False):
+                with open(log_path, 'r') as f:
+                    log_content = f.read()
+                st.text(log_content)
+    
+    # Quality metrics if available
+    if not hourly_df.empty:
+        st.subheader("📈 Data Quality Metrics")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Valid hours distribution
+            if 'valid_hour' in hourly_df.columns:
+                valid_hours_count = hourly_df['valid_hour'].sum()
+                total_hours = len(hourly_df)
+                valid_percentage = (valid_hours_count / total_hours * 100) if total_hours > 0 else 0
+                
+                st.metric(
+                    "Valid Hours", 
+                    f"{valid_hours_count:,} / {total_hours:,}",
+                    f"{valid_percentage:.1f}%"
+                )
+        
+        with col2:
+            # Links processed
+            if 'link_id' in hourly_df.columns:
+                unique_links = hourly_df['link_id'].nunique()
+                st.metric("Unique Links", f"{unique_links:,}")
+    
+    # Success message with next steps
+    st.success("✅ Processing completed successfully! You can download the results above.")
+    
+    # Option to run again
+    if st.button("🔄 Run Again", use_container_width=True):
+        # Clear results to allow new processing
+        if 'processing_results' in st.session_state:
+            del st.session_state.processing_results
+        st.rerun()
+
+
+def configure_parameters():
+    """Render parameter configuration widgets with tooltips"""
+    # This function is already implemented inline in main()
+    pass
+
+
+def display_results(hourly_df: pd.DataFrame, weekly_df: pd.DataFrame, file_paths: dict):
+    """Show preview tables, charts, and download links"""
+    # This functionality is now implemented in display_processing_results()
+    pass
+
+
+def create_visualizations(hourly_df: pd.DataFrame):
+    """Generate heatmaps and histograms for data quality assessment"""
+    # Placeholder - will be implemented in task 10
+    pass
+
+
+def results_page():
+    """Results display page"""
+    st.title("📊 Processing Results")
+    
+    if 'processing_results' not in st.session_state:
+        st.info("🔍 No results available. Please run processing on the Main Processing page first.")
+        if st.button("🏠 Go to Main Processing"):
+            st.session_state.current_page = "🏠 Main Processing"
+            st.rerun()
+        return
+    
+    # Show success message if just navigated here
+    if 'just_completed_processing' not in st.session_state:
+        st.session_state.just_completed_processing = True
+        st.success("🎉 Processing completed successfully! Here are your results:")
+    
+    # Get results from session state - handle both tuple and dict formats
+    results = st.session_state.processing_results
+    
+    if isinstance(results, tuple):
+        # Tuple format: (hourly_df, weekly_df, output_files)
+        hourly_df, weekly_df, output_files = results
+    elif isinstance(results, dict):
+        # Dictionary format from the processing flow
+        hourly_df = results.get('hourly_df', pd.DataFrame())
+        weekly_df = results.get('weekly_df', pd.DataFrame())
+        output_files = results.get('output_files', {})
+    else:
+        st.error("❌ Invalid results format in session state")
+        return
+    
+    # Display controls for number of rows
+    st.markdown("### 📊 Results Display")
+    
+    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+    with col1:
+        link_filter = st.text_input(
+            "Filter by link ID:",
+            placeholder="e.g., s_653-655",
+            help="Enter part of a link ID to filter results"
+        )
+    with col2:
+        rows_to_show = st.selectbox(
+            "Rows to show:",
+            [50, 100, 200, 500, 1000, "All"],
+            index=1,  # Default to 100
+            key="rows_selector"
+        )
+    with col3:
+        show_all_columns = st.checkbox("Show all columns", value=False)
+    with col4:
+        if st.button("🔄 Reset Filters"):
+            st.session_state.link_filter = ""
+            st.rerun()
+    
+    # Display results (moved from main processing page)
+    if not hourly_df.empty:
+        col_title, col_sort_info = st.columns([3, 1])
+        with col_title:
+            st.subheader("📊 Hourly Aggregation")
+        with col_sort_info:
+            st.caption("🔄 **Sorted by:** link_id → date → hour")
+        
+        # Sort hourly data by link_id, date, then hour_of_day
+        hourly_sorted = hourly_df.copy()
+        
+        # Ensure proper data types for sorting
+        if 'date' in hourly_sorted.columns:
+            # Convert date column to datetime if it's not already
+            if hourly_sorted['date'].dtype == 'object':
+                try:
+                    hourly_sorted['date'] = pd.to_datetime(hourly_sorted['date'])
+                except:
+                    pass  # Keep original if conversion fails
+        
+        if 'hour_of_day' in hourly_sorted.columns:
+            # Ensure hour_of_day is numeric
+            hourly_sorted['hour_of_day'] = pd.to_numeric(hourly_sorted['hour_of_day'], errors='coerce')
+        
+        # Define sort columns
+        sort_columns = []
+        if 'link_id' in hourly_sorted.columns:
+            sort_columns.append('link_id')
+        if 'date' in hourly_sorted.columns:
+            sort_columns.append('date')
+        if 'hour_of_day' in hourly_sorted.columns:
+            sort_columns.append('hour_of_day')
+        
+        if sort_columns:
+            hourly_sorted = hourly_sorted.sort_values(sort_columns, na_position='last')
+            # Reset index to ensure proper display order
+            hourly_sorted = hourly_sorted.reset_index(drop=True)
+        
+        # Apply link filter if specified
+        if link_filter and 'link_id' in hourly_sorted.columns:
+            hourly_sorted = hourly_sorted[hourly_sorted['link_id'].str.contains(link_filter, case=False, na=False)]
+        
+        # Determine how many rows to show
+        filtered_count = len(hourly_sorted)
+        if rows_to_show == "All":
+            hourly_display = hourly_sorted
+            rows_text = f"all {filtered_count:,}"
+        else:
+            hourly_display = hourly_sorted.head(rows_to_show)
+            rows_text = f"first {min(rows_to_show, filtered_count):,} of {filtered_count:,}"
+        
+        # Add filter info to caption
+        if link_filter:
+            rows_text += f" (filtered by '{link_filter}' from {len(hourly_df):,} total)"
+        else:
+            rows_text += f" total"
+        
+        # Select columns to display
+        if not show_all_columns and len(hourly_display.columns) > 8:
+            # Show key columns first
+            key_columns = ['link_id', 'date', 'hour_of_day', 'daytype', 'n_total', 'n_valid', 'avg_duration_sec', 'avg_speed_kmh']
+            display_columns = [col for col in key_columns if col in hourly_display.columns]
+            if len(display_columns) < len(hourly_display.columns):
+                remaining_cols = [col for col in hourly_display.columns if col not in display_columns]
+                display_columns.extend(remaining_cols[:8-len(display_columns)])
+            hourly_display = hourly_display[display_columns]
+        
+        st.dataframe(hourly_display, use_container_width=True, height=400)
+        st.caption(f"📊 {rows_text} rows • 🔄 Sorted by: **link_id** → **date** → **hour_of_day**")
+    
+    if not weekly_df.empty:
+        col_title, col_sort_info = st.columns([3, 1])
+        with col_title:
+            st.subheader("📅 Weekly Profile")
+        with col_sort_info:
+            st.caption("🔄 **Sorted by:** link_id → daytype → hour")
+        
+        # Sort weekly data by link_id, daytype, then hour_of_day
+        weekly_sorted = weekly_df.copy()
+        
+        # Ensure proper data types for sorting
+        if 'hour_of_day' in weekly_sorted.columns:
+            # Ensure hour_of_day is numeric
+            weekly_sorted['hour_of_day'] = pd.to_numeric(weekly_sorted['hour_of_day'], errors='coerce')
+        
+        # Define sort columns
+        sort_columns = []
+        if 'link_id' in weekly_sorted.columns:
+            sort_columns.append('link_id')
+        if 'daytype' in weekly_sorted.columns:
+            sort_columns.append('daytype')
+        if 'hour_of_day' in weekly_sorted.columns:
+            sort_columns.append('hour_of_day')
+        
+        if sort_columns:
+            weekly_sorted = weekly_sorted.sort_values(sort_columns, na_position='last')
+            # Reset index to ensure proper display order
+            weekly_sorted = weekly_sorted.reset_index(drop=True)
+        
+        # Apply link filter if specified
+        if link_filter and 'link_id' in weekly_sorted.columns:
+            weekly_sorted = weekly_sorted[weekly_sorted['link_id'].str.contains(link_filter, case=False, na=False)]
+        
+        # Determine how many rows to show
+        filtered_count = len(weekly_sorted)
+        if rows_to_show == "All":
+            weekly_display = weekly_sorted
+            rows_text = f"all {filtered_count:,}"
+        else:
+            weekly_display = weekly_sorted.head(rows_to_show)
+            rows_text = f"first {min(rows_to_show, filtered_count):,} of {filtered_count:,}"
+        
+        # Add filter info to caption
+        if link_filter:
+            rows_text += f" (filtered by '{link_filter}' from {len(weekly_df):,} total)"
+        else:
+            rows_text += f" total"
+        
+        # Select columns to display
+        if not show_all_columns and len(weekly_display.columns) > 8:
+            # Show key columns first
+            key_columns = ['link_id', 'daytype', 'hour_of_day', 'avg_n_valid', 'avg_dur', 'std_dur', 'avg_dist', 'avg_speed']
+            display_columns = [col for col in key_columns if col in weekly_display.columns]
+            if len(display_columns) < len(weekly_display.columns):
+                remaining_cols = [col for col in weekly_display.columns if col not in display_columns]
+                display_columns.extend(remaining_cols[:8-len(display_columns)])
+            weekly_display = weekly_display[display_columns]
+        
+        st.dataframe(weekly_display, use_container_width=True, height=400)
+        st.caption(f"📅 {rows_text} rows • 🔄 Sorted by: **link_id** → **daytype** → **hour_of_day**")
+    
+    # Download section
+    st.subheader("📥 Download Results")
+    
+    if output_files:
+        # Create download buttons for each output file
+        download_cols = st.columns(min(3, len(output_files)))
+        
+        for i, (file_type, file_path) in enumerate(output_files.items()):
+            col_idx = i % 3
+            
+            with download_cols[col_idx]:
+                if Path(file_path).exists():
+                    with open(file_path, 'rb') as f:
+                        file_data = f.read()
+                    
+                    # Determine file extension and MIME type
+                    file_ext = Path(file_path).suffix.lower()
+                    if file_ext == '.csv':
+                        mime_type = 'text/csv'
+                    elif file_ext == '.json':
+                        mime_type = 'application/json'
+                    elif file_ext == '.txt':
+                        mime_type = 'text/plain'
+                    elif file_ext == '.parquet':
+                        mime_type = 'application/octet-stream'
+                    else:
+                        mime_type = 'application/octet-stream'
+                    
+                    # Create download button
+                    st.download_button(
+                        label=f"📄 {file_type.replace('_', ' ').title()}",
+                        data=file_data,
+                        file_name=Path(file_path).name,
+                        mime=mime_type,
+                        use_container_width=True
+                    )
+                else:
+                    st.error(f"❌ File not found: {file_type}")
+    
+    # Show processing log if available
+    if 'processing_log' in output_files:
+        log_path = output_files['processing_log']
+        if Path(log_path).exists():
+            with st.expander("Processing Log", expanded=False):
+                with open(log_path, 'r') as f:
+                    log_content = f.read()
+                st.text(log_content)
+    
+    # Quality metrics if available
+    if not hourly_df.empty:
+        st.subheader("📈 Data Quality Metrics")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Valid hours distribution
+            if 'valid_hour' in hourly_df.columns:
+                valid_hours_count = hourly_df['valid_hour'].sum()
+                total_hours = len(hourly_df)
+                valid_percentage = (valid_hours_count / total_hours * 100) if total_hours > 0 else 0
+                
+                st.metric(
+                    "Valid Hours", 
+                    f"{valid_hours_count:,} / {total_hours:,}",
+                    f"{valid_percentage:.1f}%"
+                )
+        
+        with col2:
+            # Links processed
+            if 'link_id' in hourly_df.columns:
+                unique_links = hourly_df['link_id'].nunique()
+                st.metric("Unique Links", f"{unique_links:,}")
+    
+    # Navigation options
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🏠 Back to Processing", use_container_width=True):
+            # Navigate back to main processing page
+            st.session_state.current_page = "🏠 Main Processing"
+            st.rerun()
+    
+    with col2:
+        if st.button("🔄 Run New Processing", use_container_width=True):
+            # Clear results and navigate to processing page
+            if 'processing_results' in st.session_state:
+                del st.session_state.processing_results
+            st.session_state.current_page = "🏠 Main Processing"
+            st.rerun()
+
+
+# Control page functions moved to components/control/page.py
+
+
+def methodology_page():
+    """Methodology documentation page for hourly aggregation"""
+    st.title("📚 Methodology - Hourly Aggregation")
+
+    st.markdown("""
+    ## Overview
+
+    This tool processes Google Maps link monitoring data to generate hourly aggregations and weekly profiles for traffic analysis.
+    
+    ## Processing Pipeline
+    
+    ### 1. Data Validation & Cleaning
+    - **Column Validation**: Ensures all required columns are present with flexible naming
+    - **Duplicate Removal**: Removes duplicates by DataID and link+timestamp combinations
+    - **Data Type Validation**: Validates numeric fields and timestamp formats
+    - **Encoding Detection**: Automatically detects file encoding (UTF-8, CP1255, etc.)
+    
+    ### 2. Timestamp Processing
+    - **Format Parsing**: Supports multiple timestamp formats with fallback mechanisms
+    - **Timezone Handling**: Converts to specified timezone (default: Asia/Jerusalem)
+    - **Temporal Features**: Extracts date, hour, weekday, and week information
+    - **Holiday Detection**: Identifies Israeli holidays using Hebrew calendar
+    
+    ### 3. Data Filtering
+    - **Date Range**: Filters data within specified date ranges
+    - **Time Filters**: Selects specific weekdays and hours of day
+    - **Link Filtering**: Supports whitelist/blacklist for specific links
+    - **Validity Filtering**: Uses `is_valid` column when available
+    
+    ### 4. Hourly Aggregation
+    - **Grouping**: Groups data by link, date, hour, and day type
+    - **Metrics Calculation**:
+      - Count of total and valid measurements
+      - Average, standard deviation of duration
+      - Average distance and speed
+      - Data quality indicators
+    
+    ### 5. Weekly Profile Generation
+    - **Pattern Analysis**: Identifies typical patterns by day type and hour
+    - **Statistical Aggregation**: Computes weekly averages and variations
+    - **Quality Assessment**: Tracks data availability and reliability
+    
+    ## Key Features
+    
+    ### Robust Data Handling
+    - **Memory Efficient**: Processes large files in configurable chunks
+    - **Error Recovery**: Continues processing despite individual record errors
+    - **Flexible Schema**: Adapts to variations in column naming
+    
+    ### Quality Assurance
+    - **Validation Rules**: Multiple layers of data validation
+    - **Quality Metrics**: Comprehensive quality reporting
+    - **Audit Trail**: Complete processing logs and configuration tracking
+    
+    ### Scalability
+    - **Chunk Processing**: Handles files larger than available memory
+    - **Configurable Parameters**: Adjustable for different data characteristics
+    - **Performance Optimization**: Efficient algorithms for large-scale processing
+    
+    ## Output Files
+    
+    ### Primary Outputs
+    1. **hourly_agg.csv**: Hourly aggregated metrics by link and time
+    2. **weekly_hourly_profile.csv**: Weekly patterns by day type and hour
+    3. **quality_by_link.csv**: Data quality metrics per link
+    
+    ### Supporting Files
+    4. **processing_log.txt**: Detailed processing information
+    5. **run_config.json**: Complete configuration used for processing
+    6. **raw_data_preview.csv**: Sample of processed raw data
+    
+    ## Technical Specifications
+    
+    ### Performance
+    - **Chunk Size**: Default 50,000 rows (configurable)
+    - **Memory Usage**: Optimized data types and garbage collection
+    - **Processing Speed**: Typically 10,000-100,000 rows per second
+    
+    ### Data Types
+    - **Timestamps**: Timezone-aware datetime objects
+    - **Numeric**: Optimized float32/int32 where possible
+    - **Categorical**: Efficient category encoding for repeated values
+    
+    ### Validation Rules
+    - **Required Fields**: All specified columns must be present
+    - **Data Ranges**: Reasonable bounds for duration, distance, speed
+    - **Temporal Consistency**: Logical timestamp sequences
+    """)
+
+
+def control_methodology_page():
+    """Control methodology page - redirects to methodology.md"""
+    st.title("🔬 Dataset Control Methodology")
+
+    # Read and display the methodology from the control component
+    from pathlib import Path
+    methodology_path = Path("components/control/methodology.md")
+    if methodology_path.exists():
+        with open(methodology_path, "r", encoding="utf-8") as f:
+            st.markdown(f.read())
+    else:
+        st.error("Methodology documentation not found")
+    return
+
+    st.markdown("""
+    ## Overview
+
+    The Dataset Control and Reporting system validates Google Maps polyline data against reference shapefiles using geometric similarity analysis. It provides hierarchical validation codes and generates comprehensive link-level reports.
+
+    ## Algorithm Explanation: Google Maps vs Reference Shapefile
+
+    ### The Two Data Sources
+
+    **1. Reference Shapefile** (Your Upload)
+    - Contains "ground truth" road network geometry
+    - Structure: Links with `From`→`To` node IDs and LineString geometries
+    - Purpose: Defines the **expected** route for each link
+    - Example: Link `s_653-655` should follow a specific geometric path
+
+    **2. Google Maps Observations** (CSV Data)
+    - Contains real-world travel observations with encoded polylines
+    - Structure: Each row has `name`, `polyline`, `route_alternative`, timestamps
+    - Purpose: Shows the **actual** route Google Maps suggested/took
+    - Example: Same link `s_653-655` but with Google's encoded polyline
+
+    ## Validation Pipeline Architecture
+
+    The validation process follows a hierarchical structure with specific exit points:
+
+    ### Phase 1: Data Preparation
+    1. Load reference shapefile → Create join keys (s_From-To)
+    2. Load CSV observations → Parse link names to extract From/To IDs
+    3. Create matching pairs: CSV observation ↔ Shapefile reference
+
+    ### Phase 2: Geometric Validation (Per Observation)
+
+    **Step 1: Data Availability Check** (Codes 90-93)
+    - ✓ Required fields present? (name, polyline, route_alternative)
+    - ✓ Link name parseable? (s_653-655 → From:653, To:655)
+    - ✓ Link exists in shapefile?
+    - ✓ Polyline decodeable?
+
+    **Step 2: Geometric Similarity Tests**
+
+    **A) Coordinate System Conversion**
+    - Convert both geometries to metric CRS (EPSG:2039)
+    - Google route: decode_polyline(observation.polyline)
+    - Reference route: from shapefile geometry
+    - Both now in meters for accurate distance calculations
+
+    **B) Hausdorff Distance Test**
+    - Measures maximum distance between the two routes
+    - If distance ≤ threshold: Routes are geometrically similar
+    - If distance > threshold: Code 2 (DISTANCE_FAILURE)
+
+    **C) Length Similarity Test** (Optional)
+    - When `length_check_mode` = "ratio": Check if lengths are within ratio bounds
+    - When `length_check_mode` = "exact": Check absolute length difference
+    - When `length_check_mode` = "off": **Skip this test entirely**
+
+    **D) Coverage Analysis**
+    - Densify reference route into points every 1.0 meter
+    - For each reference point, check if Google route comes close (≤ 1.0m)
+    - Calculate percentage: covered_length / reference_route.length
+    - If coverage ≥ 0.85 (85%): Sufficient coverage
+    - If coverage < 0.85: Code 4 (COVERAGE_FAILURE)
+
+    ### Phase 3: Result Classification (Hierarchical Code System)
+
+    **When do you get Geometry Codes (0-4) vs Route Alternative Codes (21-24)?**
+
+    - **Codes 0-4**: Used when `route_alternative` field is missing, null, or invalid (<1)
+    - **Codes 21-24**: Used when `route_alternative` field contains valid values (≥1)
+
+    **Route Alternative Batch Processing:**
+
+    The system groups observations by **(link_id, timestamp)** to properly handle route alternatives:
+
+    **Single Alternative Batch** (only one row for link+timestamp):
+    - Gets code 2X based on test configuration (21, 22, 23, or 24)
+    - Individual pass/fail result in `is_valid` field
+
+    **Multiple Alternative Batch** (2+ rows for same link+timestamp):
+    - Each alternative gets code 3X based on test configuration (31, 32, 33, or 34)
+    - Each alternative gets individual pass/fail result in `is_valid` field
+
+    **Example Multi-Alternative Scenario:**
+    ```
+    s_653-655, 13:45, RouteAlternative=1, polyline_A → Individual test FAILS → Code 31
+    s_653-655, 13:45, RouteAlternative=2, polyline_B → Individual test PASSES → Code 31
+    s_653-655, 13:45, RouteAlternative=3, polyline_C → Individual test FAILS → Code 31
+
+    Result: Each alternative gets its OWN result (pass/fail) with Code 31 (multi-alt, Hausdorff only)
+    ```
+
+    **Key Insight:** The code indicates test configuration + context, `is_valid` indicates pass/fail.
+
+    **Link-Level Reporting:** Aggregates row-level results into Result Codes 0, 1, 2, 30, 31, 32, 41, 42
+
+    ### Real-World Example
+    **Successful Match:**
+    - Reference: A→B→C→D→E (5km highway segment)
+    - Google: A→B→C→D→E (same route, slight GPS noise)
+    - Results: Hausdorff 3.2m < 10m ✓, Coverage 0.97 > 0.85 ✓
+    - Final: Code 21 (ONE_ALTERNATIVE_MATCH)
+
+    **Failed Match:**
+    - Reference: A→B→C→D→E (main highway)
+    - Google: A→F→G→H→E (alternative route via side roads)
+    - Results: Hausdorff 45m > 10m ❌, Coverage 0.23 < 0.85 ❌
+    - Final: Code 22 (ONE_ALTERNATIVE_FAIL)
+    """)
+
+    # Parameters Section
+    st.header("📊 Validation Parameters")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("Geometric Analysis")
+        st.markdown("""
+        **Hausdorff Distance Threshold**
+        - Default: 10.0 meters
+        - Maximum geometric distance between polyline and reference
+        - Uses EPSG:2039 (Israel TM Grid) for metric calculations
+
+        **Length Check Mode**
+        - `off`: No length validation (default)
+        - `ratio`: Check length ratio within bounds
+        - `exact`: Check absolute length difference
+
+        **Length Ratio Bounds**
+        - Minimum: 0.90 (90% of reference length)
+        - Maximum: 1.10 (110% of reference length)
+
+        **Coverage Analysis**
+        - Minimum Coverage: 0.85 (85% overlap required)
+        - Spacing for Densification: 1.0 meter
+        """)
+
+    with col2:
+        st.subheader("Processing Settings")
+        st.markdown("""
+        **Polyline Processing**
+        - Precision: 5 (Google Maps standard)
+        - Coordinate system: WGS84 → EPSG:2039
+
+        **Link Filtering**
+        - Minimum Link Length: 20.0 meters
+        - Short links bypass length ratio checks
+
+        **Quality Thresholds**
+        - Epsilon Length (exact mode): 0.5 meters
+        - CRS: EPSG:2039 for all metric calculations
+        """)
+
+    # Validation Codes Section
+    st.header("🔢 Validation Code Reference")
+
+    st.markdown("""
+    **📍 Code Location:** Validation codes are defined in **`control_validator.py`** at **lines 46-66** in the **`ValidCode`** class.
+
+    ```python
+    class ValidCode(IntEnum):
+        # Geometry match codes (0-4)
+        EXACT_MATCH = 0
+        WITHIN_TOLERANCE = 1
+        DISTANCE_FAILURE = 2
+        LENGTH_FAILURE = 3
+        COVERAGE_FAILURE = 4
+
+        # Route alternative codes (20-24)
+        ZERO_ALTERNATIVES_FAIL = 20
+        ONE_ALTERNATIVE_MATCH = 21
+        ONE_ALTERNATIVE_FAIL = 22
+        MULTI_ALTERNATIVES_MATCH = 23
+        MULTI_ALTERNATIVES_FAIL = 24
+
+        # Data availability codes (90-93)
+        REQUIRED_FIELDS_MISSING = 90
+        NAME_PARSE_FAILURE = 91
+        LINK_NOT_IN_SHAPEFILE = 92
+        POLYLINE_DECODE_FAILURE = 93
+    ```
+    """)
+
+    st.subheader("Geometry-Only Codes (0-4)")
+    st.markdown("*Used only when RouteAlternative column is missing from input data*")
+    import pandas as pd
+    geometry_codes = pd.DataFrame({
+        "Code": [0, 1, 2, 3, 4],
+        "Meaning": [
+            "Exact match (Hausdorff = 0)",
+            "Hausdorff only ✓",
+            "Hausdorff + Length ✓✓",
+            "Hausdorff + Coverage ✓✓",
+            "Hausdorff + Length + Coverage ✓✓✓"
+        ]
+    })
+    st.dataframe(geometry_codes, use_container_width=True)
+
+    st.subheader("Single Alternative Codes (20-24)")
+    single_codes = pd.DataFrame({
+        "Code": [20, 21, 22, 23, 24],
+        "Test Configuration": [
+            "Exact match (Hausdorff = 0)",
+            "Hausdorff only ✓",
+            "Hausdorff + Length ✓✓",
+            "Hausdorff + Coverage ✓✓",
+            "Hausdorff + Length + Coverage ✓✓✓"
+        ]
+    })
+    st.dataframe(single_codes, use_container_width=True)
+
+    st.subheader("Multi Alternative Codes (30-34)")
+    multi_codes = pd.DataFrame({
+        "Code": [30, 31, 32, 33, 34],
+        "Test Configuration": [
+            "Exact match (Hausdorff = 0)",
+            "Hausdorff only ✓",
+            "Hausdorff + Length ✓✓",
+            "Hausdorff + Coverage ✓✓",
+            "Hausdorff + Length + Coverage ✓✓✓"
+        ]
+    })
+    st.dataframe(multi_codes, use_container_width=True)
+
+    st.subheader("Data Availability Codes (90-93)")
+    data_codes = pd.DataFrame({
+        "Code": [90, 91, 92, 93],
+        "Name": ["REQUIRED_FIELDS_MISSING", "NAME_PARSE_FAILURE", "LINK_NOT_IN_SHAPEFILE", "POLYLINE_DECODE_FAILURE"],
+        "Meaning": [
+            "Missing required fields: name, polyline, route_alternative",
+            "Cannot parse link name format (expected: s_FROM-TO)",
+            "Link exists in CSV but not found in reference shapefile",
+            "Invalid Google Maps polyline encoding"
+        ],
+        "Action": [
+            "Check CSV format and required columns",
+            "Verify link naming convention (e.g., s_653-655)",
+            "Update shapefile or check link IDs match",
+            "Validate polyline encoding precision"
+        ]
+    })
+    st.dataframe(data_codes, use_container_width=True)
+
+    st.markdown("""
+    ### 📈 **Understanding Your Results**
+
+    **✅ Success Indicators:**
+    - **Code 0, 20, 30**: Exact geometric match (Hausdorff = 0)
+    - **Code 1, 21, 31**: Hausdorff only test passed
+    - **Code 2, 22, 32**: Hausdorff + Length tests passed
+    - **Code 3, 23, 33**: Hausdorff + Coverage tests passed
+    - **Code 4, 24, 34**: All 3 tests passed (most comprehensive)
+
+    **❌ Common Failure Patterns:**
+    - **Codes ending in 1**: Hausdorff distance too high (increase threshold)
+    - **Codes ending in 2**: Length check failed (adjust ratio or mode)
+    - **Codes ending in 3**: Coverage too low (decrease minimum coverage)
+    - **Code 92**: Link mismatch between CSV and shapefile
+    - **Code 93**: Invalid polyline encoding
+
+    **🔧 Quick Fixes:**
+    - **All codes x1**: Increase Hausdorff threshold (try 15-20m)
+    - **All codes x2**: Check length validation settings
+    - **All codes x3**: Lower coverage minimum or check spacing
+    - **Code 90-93**: Check data format and completeness
+
+    **📊 Code Interpretation Guide:**
+    - **First digit**: Context (0=geometry only, 2=single alt, 3=multi alt)
+    - **Second digit**: Test configuration (matches UI checkboxes)
+    - **is_valid field**: Whether ALL enabled tests passed
+
+    **🎯 New Configuration System Benefits:**
+    - Code directly matches UI checkbox selection
+    - Each alternative gets individual assessment
+    - Clear distinction between single vs multi alternatives
+    - Easy to identify which tests were attempted
+    """)
+
+    st.info("💡 **Pro Tip:** Start with only Hausdorff Distance enabled (default) to get baseline results, then gradually enable Length and Coverage tests for stricter validation.")
+
+
+
+    # Algorithm Details Section
+    st.header("⚙️ Algorithm Details")
+
+    st.subheader("1. Hausdorff Distance Calculation")
+    st.markdown("""
+    ```python
+    # Hausdorff distance measures maximum distance from any point
+    # on one geometry to the nearest point on another geometry
+
+    hausdorff_distance = max(
+        directed_hausdorff(polyline_points, reference_points),
+        directed_hausdorff(reference_points, polyline_points)
+    )
+
+    # All calculations performed in EPSG:2039 for metric accuracy
+    ```
+    """)
+
+    st.subheader("2. Length Similarity Check")
+    st.markdown("""
+    **Ratio Mode (Default):**
+    ```python
+    ratio = polyline_length / reference_length
+    valid = (0.90 <= ratio <= 1.10)
+    ```
+
+    **Exact Mode:**
+    ```python
+    difference = abs(polyline_length - reference_length)
+    valid = (difference <= 0.5)  # meters
+    ```
+    """)
+
+    st.subheader("3. Coverage Analysis")
+    st.markdown("""
+    ```python
+    # Densify both geometries to 1-meter spacing
+    # Project each polyline point onto reference line
+    # Count overlapping segments within spacing tolerance
+
+    coverage = overlap_length / reference_length
+    valid = (coverage >= 0.85)
+    ```
+    """)
+
+    # Result Codes Section
+    st.header("📋 Link-Level Result Codes")
+
+    st.markdown("""
+    After processing all observations for a link, the system generates result codes based on validation patterns:
+    """)
+
+    result_data = {
+        "Code": [0, 1, 2, 30, 31, 32, 41, 42],
+        "Label": ["ALL_VALID", "SINGLE_ALT_PARTIAL", "SINGLE_ALT_ALL_INVALID", "MULTI_ALT_ALL_VALID", "MULTI_ALT_PARTIAL", "MULTI_ALT_ALL_INVALID", "NOT_RECORDED", "PARTIALLY_RECORDED"],
+        "Description": [
+            "100% valid observations",
+            "Single alternative, some invalid",
+            "Single alternative, 0% valid",
+            "Multiple alternatives, 100% valid",
+            "Multiple alternatives, mixed validity",
+            "Multiple alternatives, 0% valid",
+            "No observations for link",
+            "Some time periods missing"
+        ],
+        "Percentage": ["100%", "1-99%", "0%", "100%", "1-99%", "0%", "N/A", "Variable"]
+    }
+    st.dataframe(pd.DataFrame(result_data), use_container_width=True)
+
+    # Reports Section
+    st.header("📊 Generated Reports")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("Validation CSV Output")
+        st.markdown("""
+        **Enhanced CSV with validation results:**
+        - Original CSV data preserved
+        - `is_valid`: Boolean validation result
+        - `valid_code`: Hierarchical validation code
+        - Downloadable for further analysis
+        """)
+
+    with col2:
+        st.subheader("Link Report Shapefile")
+        st.markdown("""
+        **Shapefile with link-level results:**
+        - `result_code`: Link classification (0-42)
+        - `result_label`: Human-readable description
+        - `num`: Percentage of valid observations
+        - Compatible with GIS software
+        """)
+
+
+    # Usage Examples Section
+    st.header("💡 Usage Examples")
+
+    with st.expander("Example 1: Basic Validation"):
+        st.markdown("""
+        ```python
+        # Validate a single observation
+        params = ValidationParameters(
+            hausdorff_threshold_m=5.0,
+            length_check_mode="ratio",
+            coverage_min=0.85
+        )
+
+        is_valid, code = validate_row(row, shapefile, params)
+        # Returns: (True, 21) for valid single alternative
+        ```
+        """)
+
+    with st.expander("Example 2: Custom Parameters"):
+        st.markdown("""
+        ```python
+        # Strict validation parameters
+        strict_params = ValidationParameters(
+            hausdorff_threshold_m=2.0,     # Stricter distance
+            length_check_mode="exact",      # Exact length check
+            epsilon_length_m=0.3,          # Tighter tolerance
+            coverage_min=0.95              # Higher coverage
+        )
+        ```
+        """)
+
+    with st.expander("Example 3: Report Generation"):
+        st.markdown("""
+        ```python
+        # Generate link-level report with date filtering
+        date_filter = {'specific_day': date(2025, 7, 1)}
+
+        report = generate_link_report(
+            validated_df,
+            shapefile,
+            date_filter
+        )
+
+        # Result: GeoDataFrame with result codes and statistics
+        ```
+        """)
+
+    st.header("🔧 Troubleshooting")
+
+    trouble_col1, trouble_col2 = st.columns(2)
+
+    with trouble_col1:
+        st.subheader("Common Issues")
+        st.markdown("""
+        **Code 91 (Name Parse Failure):**
+        - Check link naming: `s_653-655`
+        - Verify underscore/dash usage
+
+        **Code 92 (Link Not Found):**
+        - Update shapefile with missing links
+        - Check From/To node consistency
+
+        **Code 93 (Polyline Decode):**
+        - Validate polyline encoding
+        - Check for special characters
+        """)
+
+    with trouble_col2:
+        st.subheader("Performance Tips")
+        st.markdown("""
+        **Large Datasets:**
+        - Use relaxed Hausdorff threshold
+        - Consider length_check_mode="off"
+        - Increase coverage_spacing_m
+
+        **Quality vs Speed:**
+        - Strict parameters = higher quality
+        - Relaxed parameters = faster processing
+        - Monitor validation percentages
+        """)
+
+
+def schema_documentation_page():
+    """Schema documentation page"""
+    st.title("📋 CSV Schema Documentation")
+    
+    st.markdown("""
+    ## Required Columns
+    
+    The following columns are **required** in your CSV file:
+    """)
+    
+    # Create a table for required columns
+    required_data = {
+        "Column Name": ["DataID", "Name", "SegmentID", "RouteAlternative", "RequestedTime", 
+                       "Timestamp", "DayInWeek", "DayType", "Duration", "Distance", "Speed", 
+                       "Url", "Polyline"],
+        "Alternative Names": ["", "", "", "", "", "", "", "", "Duration (seconds)", 
+                             "Distance (meters)", "Speed (km/h)", "", ""],
+        "Data Type": ["Integer/String", "String", "Integer", "Integer", "Time", "DateTime", 
+                     "String", "String", "Float", "Float", "Float", "String", "String"],
+        "Description": ["Unique record identifier", "Link identifier", "Segment ID", 
+                       "Route alternative", "Requested measurement time", "Actual timestamp", 
+                       "Day name (Hebrew/English)", "Day type", "Travel duration in seconds", 
+                       "Travel distance in meters", "Average speed in km/h", "Recording URL", 
+                       "Route polyline data"]
+    }
+    
+    st.dataframe(pd.DataFrame(required_data), use_container_width=True)
+    
+    st.markdown("""
+    ## Optional Columns
+    
+    | Column Name | Data Type | Description |
+    |-------------|-----------|-------------|
+    | `is_valid` | Boolean | Validity flag for the record |
+    | `valid_code` | String | Validation code/reason |
+    
+    ## Column Name Flexibility
+    
+    The system supports flexible column naming. These variations are automatically recognized:
+    
+    - **Duration**: `Duration`, `Duration (seconds)`
+    - **Distance**: `Distance`, `Distance (meters)`  
+    - **Speed**: `Speed`, `Speed (km/h)`
+    
+    ## Data Formats
+    
+    ### DateTime Format
+    - **Timestamp**: `YYYY-MM-DD HH:MM:SS` (e.g., `2025-07-01 13:45:42`)
+    - **RequestedTime**: `HH:MM:SS` (e.g., `13:45:00`)
+    
+    ### Example CSV Structure
+    
+    ```csv
+    DataID,Name,SegmentID,RouteAlternative,RequestedTime,Timestamp,DayInWeek,DayType,Duration (seconds),Distance (meters),Speed (km/h),Url,Polyline,is_valid
+    287208545,s_653-655,1185048,1,13:45:00,2025-07-01 13:45:42,יום ג,יום חול,2446.0,59428.0,87.465576,https://...,_oxwD{_wtE...,TRUE
+    ```
+    
+    ## Common Issues
+    
+    ### ❌ "Missing required columns"
+    - **Cause**: Column names don't match expected format
+    - **Solution**: Use the alternative names listed above or rename columns
+    
+    ### ❌ "Timestamps failed to parse"
+    - **Cause**: Timestamp format doesn't match `YYYY-MM-DD HH:MM:SS`
+    - **Solution**: Ensure timestamps are in the correct format
+    
+    ## File Requirements
+    
+    - **Format**: CSV (Comma-separated values)
+    - **Encoding**: UTF-8 (preferred) or other common encodings
+    - **Headers**: First row must contain column names
+    """)
+
+
+if __name__ == "__main__":
+    main()

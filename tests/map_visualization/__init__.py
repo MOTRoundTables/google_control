@@ -1,0 +1,1 @@
+# Map visualization tests package
