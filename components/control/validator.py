@@ -273,10 +273,12 @@ def calculate_coverage(
         if reference_geom.length == 0:
             return 0.0
 
-        tolerance = max(spacing, 1e-6)
-        buffered_poly = polyline_geom.buffer(tolerance, cap_style=2)
-        overlap = reference_geom.intersection(buffered_poly)
-        overlap_length = overlap.length if not overlap.is_empty else 0.0
+        overlap_length = reference_geom.intersection(polyline_geom).length
+        if overlap_length == 0.0:
+            tolerance = max(spacing, 1e-6)
+            buffered_poly = polyline_geom.buffer(tolerance, cap_style=1)
+            overlap = reference_geom.intersection(buffered_poly)
+            overlap_length = overlap.length if not overlap.is_empty else 0.0
 
         coverage = overlap_length / reference_geom.length
         return float(max(0.0, min(coverage, 1.0)))
@@ -518,22 +520,13 @@ def _validate_single_row_core(
         join_key = f"s_{from_id}-{to_id}"
 
         # Use precomputed lookup if available (much faster)
-        if shapefile_lookup is not None:
-            reference_geom = shapefile_lookup.get(join_key)
-            if reference_geom is None:
-                result['valid_code'] = ValidCode.LINK_NOT_IN_SHAPEFILE
-                return result
-        else:
-            # Fallback to old method if no lookup provided (for backwards compatibility)
-            shapefile_copy = shapefile_gdf.copy()
-            shapefile_copy['join_key'] = 's_' + shapefile_copy['From'].astype(str) + '-' + shapefile_copy['To'].astype(str)
+        if shapefile_lookup is None:
+            shapefile_lookup = _precompute_shapefile_lookup(shapefile_gdf)
 
-            matching_links = shapefile_copy[shapefile_copy['join_key'] == join_key]
-            if len(matching_links) == 0:
-                result['valid_code'] = ValidCode.LINK_NOT_IN_SHAPEFILE
-                return result
-
-            reference_geom = matching_links.iloc[0]['geometry']
+        reference_geom = shapefile_lookup.get(join_key)
+        if reference_geom is None:
+            result['valid_code'] = ValidCode.LINK_NOT_IN_SHAPEFILE
+            return result
 
         # Step 4: Decode polyline
         decoded_geom = decode_polyline(row['polyline'], params.polyline_precision)
@@ -555,16 +548,13 @@ def _validate_single_row_core(
             hausdorff_distance = calculate_hausdorff(decoded_geom, reference_geom, params.crs_metric)
             hausdorff_pass = (hausdorff_distance <= params.hausdorff_threshold_m)
 
-            # Always include Hausdorff results
             result['hausdorff_distance'] = hausdorff_distance
             result['hausdorff_pass'] = hausdorff_pass
 
             if not hausdorff_pass:
                 all_tests_pass = False
-        except Exception:
-            result['hausdorff_distance'] = float('inf')
-            result['hausdorff_pass'] = False
-            all_tests_pass = False
+        except Exception as exc:
+            raise ValueError(f"Hausdorff calculation failed for {join_key}: {exc}") from exc
 
         # Step 7: Prepare geometries for length/coverage tests if needed
         poly_geom_metric = decoded_geom

@@ -14,7 +14,7 @@ import zipfile
 
 # Import validation modules from the same component
 from .validator import validate_dataframe_batch, ValidationParameters
-from .report import generate_link_report, write_shapefile_with_results
+from .report import generate_link_report, write_shapefile_with_results, create_failed_observations_reference_shapefile
 from components.processing.pipeline import resolve_hebrew_encoding
 
 
@@ -86,11 +86,28 @@ def control_page():
         )
 
         # Output directory
-        output_dir = st.text_input(
+        raw_output_dir = st.text_input(
             "Output directory",
             value="./control_output",
             help="Directory where validation results and reports will be saved"
         )
+
+        output_dir_path = Path(raw_output_dir).expanduser()
+        if not output_dir_path.is_absolute():
+            output_dir_path = Path.cwd() / output_dir_path
+
+        try:
+            output_dir_path = output_dir_path.resolve()
+        except OSError as exc:
+            st.error(f"Unable to access output directory: {exc}")
+            return
+
+        workspace_root = Path.cwd().resolve()
+        if not str(output_dir_path).startswith(str(workspace_root)):
+            st.warning("Output directory adjusted to workspace for safety")
+            output_dir_path = workspace_root / "control_output"
+
+        output_dir = str(output_dir_path)
 
         # Validation Parameters Section
         st.subheader("⚙️ Validation Parameters")
@@ -766,12 +783,8 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
         report_shp_path = Path(output_dir) / "link_report.shp"
         # Create shapefile that matches CSV exactly (same columns and order)
         try:
-            report_gdf_copy = report_with_stats_gdf.copy()
-            # Ensure CRS is set
-            if report_gdf_copy.crs is None:
-                report_gdf_copy = report_gdf_copy.set_crs('EPSG:4326')
-            # Write shapefile preserving exact CSV structure
-            report_gdf_copy.to_file(str(report_shp_path), driver='ESRI Shapefile')
+            # Use write_shapefile_with_results to handle proper field ordering and truncation
+            write_shapefile_with_results(report_with_stats_gdf, str(report_shp_path))
             print(f"Created link report shapefile: {report_shp_path}")
         except Exception as e:
             print(f"Warning: Failed to create link report shapefile: {e}")
@@ -794,6 +807,20 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
                 output_files['failed_observations_zip'] = str(failed_shapefile_zip_path)
             except Exception as e:
                 print(f"Warning: Failed to create failed observations shapefile: {e}")
+
+            # 1b. Failed observations reference shapefile (for GIS overlay comparison)
+            failed_ref_shp_path = Path(output_dir) / "failed_observations_reference.shp"
+            try:
+                create_failed_observations_reference_shapefile(
+                    validation_failed_df,
+                    report_gdf,
+                    str(failed_ref_shp_path)
+                )
+                failed_ref_shapefile_zip_path = create_shapefile_zip_package(str(failed_ref_shp_path), output_dir)
+                output_files['failed_observations_reference_zip'] = str(failed_ref_shapefile_zip_path)
+                print(f"Created failed observations reference shapefile: {failed_ref_shp_path}")
+            except Exception as e:
+                print(f"Warning: Failed to create failed observations reference shapefile: {e}")
 
         # 2. Missing observations shapefile (code 94 with original shapefile geometry)
         if completeness_params and not missing_observations_df.empty:
@@ -934,21 +961,23 @@ def load_csv_with_encoding(csv_file):
         if file_size > 50 * 1024 * 1024:  # 50MB threshold for chunking
             st.info("🔄 Large file detected, processing in chunks...")
             chunk_reader = pd.read_csv(temp_file_path, chunksize=10000, encoding=detected_encoding)
-
-            # Process ALL chunks, not just the first one
-            chunks = []
             chunk_count = 0
             progress_bar = st.progress(0)
 
+            csv_df = None
             for chunk in chunk_reader:
-                chunks.append(chunk)
                 chunk_count += 1
-                # Update progress (estimate based on chunk size)
                 progress_bar.progress(min(chunk_count * 10000 / 100000, 1.0))
 
-            csv_df = pd.concat(chunks, ignore_index=True)
+                if csv_df is None:
+                    csv_df = chunk
+                else:
+                    csv_df = pd.concat([csv_df, chunk], ignore_index=True)
+
             progress_bar.empty()
-            st.success(f"✅ Processed {len(csv_df)} rows from {chunk_count} chunks")
+            if csv_df is None:
+                csv_df = pd.DataFrame()
+            st.success(f"Processed {len(csv_df)} rows from {chunk_count} chunks")
         else:
             csv_df = pd.read_csv(temp_file_path, encoding=detected_encoding)
 
@@ -962,16 +991,19 @@ def load_csv_with_encoding(csv_file):
                 if file_size > 50 * 1024 * 1024:
                     chunk_reader = pd.read_csv(temp_file_path, chunksize=10000, encoding=fallback_encoding)
 
-                    # Process ALL chunks, not just the first one
-                    chunks = []
+                    csv_df = None
                     chunk_count = 0
 
                     for chunk in chunk_reader:
-                        chunks.append(chunk)
                         chunk_count += 1
+                        if csv_df is None:
+                            csv_df = chunk
+                        else:
+                            csv_df = pd.concat([csv_df, chunk], ignore_index=True)
 
-                    csv_df = pd.concat(chunks, ignore_index=True)
-                    st.success(f"✅ Successfully read file using {fallback_encoding} encoding ({len(csv_df)} rows from {chunk_count} chunks)")
+                    if csv_df is None:
+                        csv_df = pd.DataFrame()
+                    st.success(f"Successfully read file using {fallback_encoding} encoding ({len(csv_df)} rows from {chunk_count} chunks)")
                 else:
                     csv_df = pd.read_csv(temp_file_path, encoding=fallback_encoding)
                     st.success(f"✅ Successfully read file using {fallback_encoding} encoding")
@@ -1009,25 +1041,36 @@ def load_csv_with_encoding(csv_file):
 
 def fix_hebrew_columns(csv_df):
     """Fix Hebrew text encoding issues in specific columns"""
-    # Fix Hebrew text encoding issues for specific columns
     hebrew_columns = ['DayInWeek', 'DayType']
     hebrew_fixes_applied = 0
 
     for col in hebrew_columns:
-        if col in csv_df.columns:
-            # Count original corrupted values
-            original_values = csv_df[col].astype(str)
+        if col not in csv_df.columns:
+            continue
 
-            # Fix corrupted Hebrew text
-            csv_df[col] = csv_df[col].apply(fix_hebrew_encoding)
+        series = csv_df[col]
+        non_null = series[series.notna()].astype(str)
+        if non_null.empty:
+            continue
 
-            # Count how many fixes were applied
-            fixed_values = csv_df[col].astype(str)
-            fixes_in_column = sum(1 for orig, fixed in zip(original_values, fixed_values) if orig != fixed)
-            hebrew_fixes_applied += fixes_in_column
+        cache = {value: fix_hebrew_encoding(value) for value in non_null.unique()}
+
+        def _transform(val):
+            if pd.isna(val):
+                return val
+            val_str = str(val)
+            return cache.get(val_str, fix_hebrew_encoding(val_str))
+
+        transformed = series.map(_transform)
+        csv_df[col] = transformed
+
+        original_compare = series.fillna('__NA__').astype(str)
+        transformed_compare = transformed.fillna('__NA__').astype(str)
+        fixes_in_column = (original_compare != transformed_compare).sum()
+        hebrew_fixes_applied += fixes_in_column
 
     if hebrew_fixes_applied > 0:
-        st.info(f"📝 Applied Hebrew text corrections to {hebrew_fixes_applied} corrupted entries")
+        st.info(f"Applied Hebrew text corrections to {hebrew_fixes_applied} corrupted entries")
 
     return csv_df
 

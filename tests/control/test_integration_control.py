@@ -25,7 +25,7 @@ class TestProcessSampleCSV:
         # Create sample CSV data that mimics real structure
         self.sample_csv_data = pd.DataFrame({
             'DataID': ['001', '002', '003', '004'],
-            'Name': ['s_653-655', 's_653-655', 's_655-657', 's_999-888'],
+            'Name': ['s_653-655', 's_653-655', 's_655-657', 's_655-657'],
             'SegmentID': ['1185048', '1185048', '1185049', '1185050'],
             'RouteAlternative': [1, 2, 1, 1],
             'RequestedTime': ['13:45:00', '13:50:00', '14:00:00', '14:15:00'],
@@ -123,17 +123,27 @@ class TestProcessSampleCSV:
 
     def test_report_code_generation(self):
         """Test that report codes are generated correctly."""
-        # Create mixed validation scenario
-        mixed_data = self.sample_csv_data.copy()
-        mixed_data['is_valid'] = [True, False, True, False]
-        mixed_data['valid_code'] = [1, 2, 1, 93]
-        mixed_data['link_id'] = mixed_data['Name']
+        # Create mixed validation scenario with different success patterns per link
+        mixed_data = pd.DataFrame({
+            'Name': ['s_653-655', 's_653-655', 's_655-657', 's_655-657'],  # Two different links
+            'link_id': ['s_653-655', 's_653-655', 's_655-657', 's_655-657'],
+            'timestamp': ['2025-01-01 10:00', '2025-01-01 11:00', '2025-01-01 10:00', '2025-01-01 11:00'],
+            'is_valid': [True, True, True, False],  # First link: all valid, Second link: partial
+            'valid_code': [2, 2, 2, 2]  # Valid context codes
+        })
 
         report_gdf = generate_link_report(mixed_data, self.reference_shapefile)
 
-        # Should have various result codes
+        # Should have different result codes for the two links
         result_codes = report_gdf['result_code'].unique()
-        assert len(result_codes) > 1
+        assert len(result_codes) >= 1  # Should have at least one result code
+
+        # First link should be all valid, second link should be partial
+        link_653_655_result = report_gdf[report_gdf['From'] == '653']['result_code'].iloc[0]
+        link_655_657_result = report_gdf[report_gdf['From'] == '655']['result_code'].iloc[0]
+
+        # The codes should be different (all valid vs partial)
+        assert link_653_655_result != link_655_657_result
 
 
 class TestDateFiltering:

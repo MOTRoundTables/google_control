@@ -338,12 +338,15 @@ The validation system generates **6-11 output files** organized into three logic
 - **Purpose**: Link-level summary statistics for network analysis
 
 #### **3. link_report_shapefile.zip**
-- **Content**: Complete spatial package with validation statistics
-- **Components**: .shp, .shx, .dbf, .prj, .cpg files with truncated field names for DBF compatibility
+- **Content**: Complete spatial package with validation statistics matching CSV field order exactly
+- **Components**: .shp, .shx, .dbf, .prj, .cpg files with standardized field ordering
 - **Geometry**: Original reference shapefile LineString features
 - **Purpose**: GIS-compatible spatial visualization of link performance
 
-- **Field preservation**: Writer post-processes the DBF header so `result_code` and `result_label` remain intact even though the driver temporarily truncates them during export.
+- **Field Order Guarantee**: Fields are structured in exact order to match CSV report:
+  `From, To, perfect_match_percent, threshold_pass_percent, failed_percent, total_success_rate, total_observations, successful_observations, failed_observations, total_routes, single_route_observations, multi_route_observations, expected_observations, missing_observations, data_coverage_percent`
+
+- **DBF Compatibility**: Field names are automatically truncated to 10 characters for shapefile DBF compatibility while preserving field order and data integrity
 
 ### **Analysis Files** (Always Generated)
 
@@ -372,8 +375,9 @@ The validation system generates **6-11 output files** organized into three logic
 - **Accuracy**: Prevents false positives by checking within each link's actual temporal range
 - **Purpose**: Identify specific missing time periods in data collection schedule
 
-#### **8-11. Spatial Shapefiles** ^(Only if shapefile generation enabled)* 
+#### **8-12. Spatial Shapefiles** *(Only if shapefile generation enabled)*
 - **failed_observations_shapefile.zip**: Validation failures with **decoded polyline geometries** from Google observations
+- **failed_observations_reference_shapefile.zip**: Reference comparison with **original shapefile geometries** for failed timestamps (NEW)
 - **missing_observations_shapefile.zip**: Missing data with **original shapefile geometries** *(conditional on completeness analysis)*
 - **no_data_links_shapefile.zip**: No-data links with **original shapefile geometries**
 - **link_report.shp + components**: Individual shapefile files (also packaged in ZIP above)
@@ -382,6 +386,7 @@ The validation system generates **6-11 output files** organized into three logic
 
 **Geometry Sources by File Type:**
 - **Validation Failures (codes 1-3)**: Use decoded Google polylines to show actual routing differences
+- **Failed Observations Reference (NEW)**: Use original shapefile geometry to show expected routes for failed timestamps
 - **Missing/No-Data (codes 94-95)**: Use original shapefile geometry since no Google data exists
 
 **Conditional Generation Rules:**
@@ -413,6 +418,51 @@ The validation system provides comprehensive geometric analysis with transparent
 - **Transparent Results**: Individual test metrics instead of confusing configuration codes
 
 The system handles diverse validation scenarios with reliable geometric analysis and comprehensive reporting capabilities.
+
+## Failed Observations Reference Shapefile (NEW)
+
+### Visual Comparison Analysis Feature
+
+The system now generates a specialized reference comparison shapefile for failed observations to enable precise GIS overlay analysis.
+
+#### **Purpose and Design**
+- **Problem**: When validations fail, users need to see both what Google Maps returned AND what was expected
+- **Solution**: Two complementary shapefiles for perfect visual comparison:
+  1. `failed_observations.shp` - Shows actual Google polyline geometries (what was taken)
+  2. `failed_observations_reference.shp` - Shows reference shapefile geometries (what was expected)
+
+#### **Timestamp Aggregation Logic**
+- **Key Insight**: Failed observations represent timestamps where ALL route alternatives failed validation
+- **Aggregation**: Groups failed alternatives by (link_id, timestamp) and calculates summary metrics
+- **One Row Per Failed Timestamp**: Not per individual alternative, avoiding duplicate reference geometries
+
+#### **Field Structure**
+**Core Identifiers:**
+- `link_id`: Link identifier (e.g., "s_653-655")
+- `timestamp`: When the failure occurred
+- `num_alternatives`: How many alternatives were attempted
+
+**Aggregated Failure Metrics:**
+- `worst_hausdorff`, `best_hausdorff`, `avg_hausdorff`: Distance metrics across all failed alternatives
+- `worst_length_ratio`, `best_length_ratio`, `avg_length_ratio`: Length metrics (when enabled)
+- `worst_coverage`, `best_coverage`, `avg_coverage`: Coverage metrics (when enabled)
+
+**Context Information:**
+- `valid_code`: Validation context (2=single alternative, 3=multiple alternatives)
+- `data_source`: Always "reference_shapefile" for provenance
+
+#### **GIS Analysis Workflow**
+1. **Load Both Layers**: Import both failed_observations.shp and failed_observations_reference.shp
+2. **Visual Overlay**: Display with different symbology (e.g., red for actual, blue for expected)
+3. **Identify Patterns**: Spot systematic routing differences, problem areas, or infrastructure issues
+4. **Measure Deviations**: Use built-in GIS tools to measure distances between actual and expected routes
+5. **Spatial Analysis**: Analyze failure clusters, corridor issues, or regional patterns
+
+#### **Example Use Cases**
+- **Route Deviation Analysis**: See exactly where Google chose different paths than expected
+- **Infrastructure Impact**: Identify if construction or road changes affected routing
+- **Validation Threshold Tuning**: Visual confirmation of whether thresholds are appropriate
+- **Quality Assurance**: Verify that reference shapefile accurately represents intended routes
 
 ## Enhanced Data Completeness Analysis
 

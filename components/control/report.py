@@ -11,6 +11,8 @@ import geopandas as gpd
 from enum import IntEnum
 
 from pathlib import Path
+import shutil
+import tempfile
 
 # Legacy enum for backwards compatibility with tests
 class ResultCode(IntEnum):
@@ -581,78 +583,69 @@ def _rename_dbf_field(dbf_path: Path, current: str, new: str) -> None:
 
 
 def write_shapefile_with_results(gdf: gpd.GeoDataFrame, output_path: str) -> None:
-    """
-    Write complete shapefile package with added transparent metrics fields.
-
-    Args:
-        gdf: GeoDataFrame with transparent metrics fields
-        output_path: Output shapefile path (.shp)
-
-    Returns:
-        None
-
-    Raises:
-        IOError: If write fails or shapefile package incomplete
-    """
+    """Write complete shapefile package with added transparent metrics fields."""
+    tmp_dir = None
     try:
-        # Create a copy to avoid modifying the original
         output_gdf = gdf.copy()
 
-        # Rename columns to fit DBF 10-character limit in logical order
+        # Define the exact field order to match CSV report
+        desired_order = [
+            'From', 'To',
+            'perfect_match_percent', 'threshold_pass_percent', 'failed_percent', 'total_success_rate',
+            'total_observations', 'successful_observations', 'failed_observations', 'total_routes',
+            'single_route_observations', 'multi_route_observations',
+            'expected_observations', 'missing_observations', 'data_coverage_percent'
+        ]
+
+        # Column mapping for shapefile field name limits (10 chars max)
         column_mapping = {
-            # Performance breakdown percentages (start)
             'perfect_match_percent': 'perfect_p',
             'threshold_pass_percent': 'thresh_p',
             'failed_percent': 'failed_p',
             'total_success_rate': 'total_succ',
-            # Basic observation counts
             'total_observations': 'total_obs',
             'successful_observations': 'success_ob',
             'failed_observations': 'failed_obs',
             'total_routes': 'total_rts',
-            # Route alternative breakdown (end)
             'single_route_observations': 'single_obs',
-            'multi_route_observations': 'multi_obs'
+            'multi_route_observations': 'multi_obs',
+            'expected_observations': 'expect_obs',
+            'missing_observations': 'missing_ob',
+            'data_coverage_percent': 'coverage_p'
         }
 
-        # Add completeness fields to mapping if they exist (between counts and route breakdown)
-        if 'expected_observations' in gdf.columns:
-            column_mapping.update({
-                'expected_observations': 'expect_obs',
-                'missing_observations': 'missing_ob',
-                'data_coverage_percent': 'coverage_p'
-            })
+        # Reorder columns to match CSV exactly (only include columns that exist)
+        available_cols = [col for col in desired_order if col in output_gdf.columns]
+        remaining_cols = [col for col in output_gdf.columns if col not in desired_order and col != 'geometry']
+        final_order = available_cols + remaining_cols + ['geometry']
+        output_gdf = output_gdf[final_order]
 
-        # Rename columns for DBF compatibility
+        # Apply column mapping for field name truncation
         output_gdf = output_gdf.rename(columns=column_mapping)
 
-        # Ensure proper data types
-        # Handle percentage columns
         for col in ['perfect_p', 'thresh_p', 'failed_p', 'total_succ', 'coverage_p']:
             if col in output_gdf.columns:
                 output_gdf[col] = pd.to_numeric(output_gdf[col], errors='coerce')
 
-        # Handle integer count columns
         for col in ['total_obs', 'success_ob', 'failed_obs', 'total_rts', 'expect_obs', 'missing_ob', 'single_obs', 'multi_obs']:
             if col in output_gdf.columns:
                 output_gdf[col] = output_gdf[col].astype(int)
 
-        # Ensure CRS is set for proper .prj file creation
+        if 'num' in output_gdf.columns:
+            output_gdf['num'] = pd.to_numeric(output_gdf['num'], errors='coerce')
+
         if output_gdf.crs is None:
             output_gdf = output_gdf.set_crs('EPSG:4326')
 
-        # Write shapefile with all components
-        output_gdf.to_file(output_path, driver='ESRI Shapefile')
+        output_path = Path(output_path)
+        tmp_dir = Path(tempfile.mkdtemp(prefix='control_shp_', dir=output_path.parent))
+        tmp_shp_path = tmp_dir / output_path.name
 
-        # Verify all required shapefile components were created
-        base_path = Path(output_path).with_suffix('')
+        output_gdf.to_file(tmp_shp_path, driver='ESRI Shapefile')
+
         required_files = ['.shp', '.shx', '.dbf']
-        missing_files = []
-
-        for ext in required_files:
-            if not (base_path.with_suffix(ext)).exists():
-                missing_files.append(ext)
-
+        base_path = tmp_shp_path.with_suffix('')
+        missing_files = [ext for ext in required_files if not base_path.with_suffix(ext).exists()]
         if missing_files:
             raise IOError(f"Shapefile creation incomplete. Missing files: {', '.join(missing_files)}")
 
@@ -660,16 +653,23 @@ def write_shapefile_with_results(gdf: gpd.GeoDataFrame, output_path: str) -> Non
         _rename_dbf_field(dbf_path, 'result_cod', 'result_code')
         _rename_dbf_field(dbf_path, 'result_lab', 'result_label')
 
-        # Check if .prj file was created (CRS information)
         prj_file = base_path.with_suffix('.prj')
         if not prj_file.exists():
-            # Create a basic WGS84 .prj file manually if geopandas didn't create one
-            wgs84_prj = '''GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]'''
-            with open(prj_file, 'w') as f:
-                f.write(wgs84_prj)
+            wgs84_prj = 'GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]'
+            prj_file.write_text(wgs84_prj)
+
+        destination_base = output_path.with_suffix('')
+        destination_base.parent.mkdir(parents=True, exist_ok=True)
+        for ext in ['.shp', '.shx', '.dbf', '.prj', '.cpg']:
+            tmp_file = base_path.with_suffix(ext)
+            if tmp_file.exists():
+                shutil.move(str(tmp_file), str(destination_base.with_suffix(ext)))
 
     except Exception as e:
         raise IOError(f"Failed to write complete shapefile package: {e}")
+    finally:
+        if tmp_dir and tmp_dir.exists():
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def extract_failed_observations(validated_df: pd.DataFrame) -> pd.DataFrame:
@@ -1245,4 +1245,160 @@ def create_failed_observations_shapefile(
         output_path=output_path,
         geometry_source='polyline'
     )
+
+
+def create_failed_observations_reference_shapefile(
+    failed_observations_df: pd.DataFrame,
+    shapefile_gdf: gpd.GeoDataFrame,
+    output_path: str
+) -> None:
+    """
+    Create a reference comparison shapefile for failed observations.
+
+    This shapefile aggregates failed timestamps (where ALL alternatives failed) and shows
+    the reference geometry that was expected. One row per failed timestamp, not per alternative.
+
+    Logic:
+    - Group failed observations by (link_id, timestamp)
+    - For each failed timestamp, calculate aggregated metrics across all alternatives
+    - Use reference shapefile geometry (what was expected)
+
+    Perfect for GIS overlay with failed_observations.shp to see why routes failed.
+
+    Args:
+        failed_observations_df: DataFrame with individual failed validation results
+        shapefile_gdf: Reference shapefile for geometry
+        output_path: Path for output shapefile
+    """
+    if failed_observations_df.empty:
+        print(f"Warning: No failed observations to create reference shapefile: {output_path}")
+        return
+
+    # Create shapefile lookup for reference geometry
+    shapefile_lookup = {}
+    for _, row in shapefile_gdf.iterrows():
+        link_id = f's_{row["From"]}-{row["To"]}'
+        shapefile_lookup[link_id] = row
+
+    # Standardize column names
+    df = failed_observations_df.copy()
+    if 'Name' in df.columns and 'link_id' not in df.columns:
+        df['link_id'] = df['Name']
+    if 'Timestamp' in df.columns and 'timestamp' not in df.columns:
+        df['timestamp'] = df['Timestamp']
+
+    # Group by (link_id, timestamp) to aggregate failed alternatives
+    reference_rows = []
+    geometries = []
+
+    for (link_id, timestamp), group in df.groupby(['link_id', 'timestamp']):
+        if link_id in shapefile_lookup:
+            shapefile_row = shapefile_lookup[link_id]
+
+            # Calculate aggregated metrics across all failed alternatives
+            num_alternatives = len(group)
+
+            # Hausdorff metrics (always present)
+            hausdorff_distances = group['hausdorff_distance'].dropna()
+            worst_hausdorff = hausdorff_distances.max() if not hausdorff_distances.empty else None
+            best_hausdorff = hausdorff_distances.min() if not hausdorff_distances.empty else None
+            avg_hausdorff = hausdorff_distances.mean() if not hausdorff_distances.empty else None
+
+            reference_row = {
+                # Core identifiers
+                'link_id': link_id,
+                'timestamp': timestamp,
+                'num_alternatives': num_alternatives,
+
+                # Hausdorff metrics
+                'worst_hausdorff': worst_hausdorff,
+                'best_hausdorff': best_hausdorff,
+                'avg_hausdorff': avg_hausdorff,
+
+                # Context
+                'valid_code': group['valid_code'].iloc[0],  # Should be same for all alternatives
+                'data_source': 'reference_shapefile'
+            }
+
+            # Length metrics (conditional on presence)
+            if 'length_ratio' in group.columns:
+                length_ratios = group['length_ratio'].dropna()
+                if not length_ratios.empty:
+                    reference_row['worst_length_ratio'] = length_ratios.max()
+                    reference_row['best_length_ratio'] = length_ratios.min()
+                    reference_row['avg_length_ratio'] = length_ratios.mean()
+
+            # Coverage metrics (conditional on presence)
+            if 'coverage_percent' in group.columns:
+                coverage_percents = group['coverage_percent'].dropna()
+                if not coverage_percents.empty:
+                    reference_row['worst_coverage'] = coverage_percents.min()  # Lower coverage is worse
+                    reference_row['best_coverage'] = coverage_percents.max()
+                    reference_row['avg_coverage'] = coverage_percents.mean()
+
+            reference_rows.append(reference_row)
+            geometries.append(shapefile_row['geometry'])
+        else:
+            print(f"Warning: Link {link_id} not found in reference shapefile")
+
+    if not reference_rows:
+        print(f"Warning: No valid reference geometries found for failed observations: {output_path}")
+        return
+
+    # Create GeoDataFrame with reference geometries
+    result_gdf = gpd.GeoDataFrame(reference_rows, geometry=geometries)
+
+    # Set CRS to match original shapefile
+    result_gdf.crs = shapefile_gdf.crs or 'EPSG:4326'
+
+    # Save shapefile
+    try:
+        result_gdf.to_file(output_path, driver='ESRI Shapefile')
+        print(f"Created failed observations reference shapefile: {output_path}")
+        print(f"  - {len(result_gdf)} failed timestamps with reference geometry")
+        print(f"  - Aggregated metrics across {sum(row['num_alternatives'] for row in reference_rows)} total failed alternatives")
+        print(f"  - Use with failed_observations.shp for visual comparison")
+    except Exception as e:
+        print(f"Error creating failed observations reference shapefile: {e}")
+
+
+def _determine_failure_reason(row: pd.Series) -> str:
+    """Determine primary failure reason for a failed observation."""
+    reasons = []
+
+    if row.get('hausdorff_pass') == False:
+        hausdorff_dist = row.get('hausdorff_distance')
+        if hausdorff_dist is not None:
+            reasons.append(f"Hausdorff: {hausdorff_dist:.1f}m")
+        else:
+            reasons.append("Hausdorff failed")
+
+    if row.get('length_pass') == False:
+        length_ratio = row.get('length_ratio')
+        if length_ratio is not None:
+            reasons.append(f"Length: {length_ratio:.2f}x")
+        else:
+            reasons.append("Length failed")
+
+    if row.get('coverage_pass') == False:
+        coverage_pct = row.get('coverage_percent')
+        if coverage_pct is not None:
+            reasons.append(f"Coverage: {coverage_pct:.1f}%")
+        else:
+            reasons.append("Coverage failed")
+
+    if not reasons:
+        valid_code = row.get('valid_code')
+        if valid_code == 90:
+            reasons.append("Missing fields")
+        elif valid_code == 91:
+            reasons.append("Name parse error")
+        elif valid_code == 92:
+            reasons.append("Link not in shapefile")
+        elif valid_code == 93:
+            reasons.append("Invalid polyline")
+        else:
+            reasons.append("Unknown failure")
+
+    return "; ".join(reasons)
 
