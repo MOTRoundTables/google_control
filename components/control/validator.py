@@ -227,16 +227,24 @@ def check_length_similarity(
         poly_length = polyline_geom.length
         ref_length = reference_geom.length
 
-        # Apply minimum length threshold to stabilize ratios
-        if ref_length < params.min_link_length_m:
-            return True  # Skip length check for very short links
+        if ref_length <= 0:
+            # Degenerate reference - treat as match only when the polyline is effectively zero as well
+            return abs(poly_length) <= params.epsilon_length_m
 
         if mode == "ratio":
-            ratio = poly_length / ref_length if ref_length > 0 else 0
+            ratio = poly_length / ref_length
+            if ref_length < params.min_link_length_m:
+                # Short links: widen tolerance slightly but still enforce bounds
+                expanded_min = max(0.0, params.length_ratio_min - 0.05)
+                expanded_max = params.length_ratio_max + 0.05
+                return expanded_min <= ratio <= expanded_max
             return params.length_ratio_min <= ratio <= params.length_ratio_max
 
         elif mode == "exact":
             diff = abs(poly_length - ref_length)
+            if ref_length < params.min_link_length_m:
+                effective_epsilon = max(params.epsilon_length_m, 0.01 * params.min_link_length_m)
+                return diff <= effective_epsilon
             return diff <= params.epsilon_length_m
 
         return False
@@ -262,42 +270,16 @@ def calculate_coverage(
         Coverage fraction (0.0 to 1.0)
     """
     try:
-        # Densify both geometries to same spacing
-        def densify_line(line, spacing):
-            if line.length < spacing:
-                return line
-            distances = np.arange(0, line.length, spacing)
-            points = [line.interpolate(d) for d in distances]
-            # Add the end point
-            points.append(line.interpolate(line.length))
-            return LineString(points)
-
-        # Densify geometries
-        densified_poly = densify_line(polyline_geom, spacing)
-        densified_ref = densify_line(reference_geom, spacing)
-
         if reference_geom.length == 0:
             return 0.0
 
-        # Calculate overlap by projecting polyline points onto reference
-        overlap_length = 0.0
-        for coord in densified_poly.coords:
-            point = Point(coord)
-            projected_distance = reference_geom.project(point)
+        tolerance = max(spacing, 1e-6)
+        buffered_poly = polyline_geom.buffer(tolerance, cap_style=2)
+        overlap = reference_geom.intersection(buffered_poly)
+        overlap_length = overlap.length if not overlap.is_empty else 0.0
 
-            # Check if point projects onto the reference line
-            if 0 <= projected_distance <= reference_geom.length:
-                # Project back to get the actual point on reference
-                projected_point = reference_geom.interpolate(projected_distance)
-                distance_to_ref = point.distance(projected_point)
-
-                # Consider it overlapping if it's close enough (within spacing)
-                if distance_to_ref <= spacing:
-                    overlap_length += spacing
-
-        # Normalize by reference length
-        coverage = min(overlap_length / reference_geom.length, 1.0)
-        return coverage
+        coverage = overlap_length / reference_geom.length
+        return float(max(0.0, min(coverage, 1.0)))
 
     except Exception:
         return 0.0

@@ -10,6 +10,8 @@ import pandas as pd
 import geopandas as gpd
 from enum import IntEnum
 
+from pathlib import Path
+
 # Legacy enum for backwards compatibility with tests
 class ResultCode(IntEnum):
     """Legacy result codes for backwards compatibility."""
@@ -28,6 +30,9 @@ class ResultCode(IntEnum):
     MULTI_ALT_ALL_INVALID = 32
     # Not recorded
     NOT_RECORDED = 41
+    ALL_VALID = SUCCESS
+    PARTIAL = SINGLE_ALT_PARTIAL
+    ALL_INVALID = SINGLE_ALT_ALL_INVALID
 from datetime import date, datetime, timedelta
 import numpy as np
 
@@ -68,34 +73,32 @@ def determine_result_code(stats: Dict[str, Any]) -> tuple:
     """
     total_obs = stats.get('total_observations', 0)
     valid_obs = stats.get('valid_observations', 0)
+    invalid_obs = stats.get('invalid_observations', total_obs - valid_obs)
 
-    # Check if link has no observations
+    multi_alt = stats.get('multi_alternative_count', 0) or 0
+    single_alt = stats.get('single_alternative_count', 0) or 0
+
     if total_obs == 0:
-        return (ResultCode.NOT_RECORDED, "Link not recorded", 0.0)
+        return (ResultCode.NOT_RECORDED, "did not record", None)
 
-    # Calculate success percentage
-    success_pct = (valid_obs / total_obs * 100) if total_obs > 0 else 0.0
-
-    # Check if multiple alternatives
-    multi_alt = stats.get('multi_alternative_count', 0)
-    single_alt = stats.get('single_alternative_count', 0)
+    success_pct = (valid_obs / total_obs * 100) if total_obs else 0.0
 
     if multi_alt > 0:
-        # Multiple alternatives
+        label = "RouteAlternative greater than one"
         if success_pct == 100:
-            return (ResultCode.MULTI_ALT_ALL_VALID, "RouteAlternative greater than one", 100.0)
-        elif success_pct > 0:
-            return (ResultCode.MULTI_ALT_PARTIAL, "RouteAlternative greater than one", success_pct)
-        else:
-            return (ResultCode.MULTI_ALT_ALL_INVALID, "RouteAlternative greater than one", 0.0)
-    else:
-        # Single alternative or no RouteAlternative
-        if success_pct == 100:
-            return (ResultCode.SINGLE_ALT_ALL_VALID, "RouteAlternative equals one", 100.0)
-        elif success_pct > 0:
-            return (ResultCode.SINGLE_ALT_PARTIAL, "RouteAlternative equals one", success_pct)
-        else:
-            return (ResultCode.SINGLE_ALT_ALL_INVALID, "RouteAlternative equals one", 0.0)
+            return (ResultCode.MULTI_ALT_ALL_VALID, label, 100.0)
+        if success_pct > 0:
+            return (ResultCode.MULTI_ALT_PARTIAL, label, success_pct)
+        return (ResultCode.MULTI_ALT_ALL_INVALID, label, 0.0)
+
+    label_single_partial = "no RouteAlternative"
+    label_single_invalid = "no RouteAlternative and all invalid"
+
+    if success_pct == 100:
+        return (ResultCode.ALL_VALID, "valid", 100.0)
+    if success_pct > 0:
+        return (ResultCode.SINGLE_ALT_PARTIAL, label_single_partial, success_pct)
+    return (ResultCode.SINGLE_ALT_ALL_INVALID, label_single_invalid, 0.0)
 
 
 def calculate_expected_observations(start_date: date, end_date: date, interval_minutes: int) -> int:
@@ -173,107 +176,131 @@ def aggregate_link_statistics(link_data: pd.DataFrame) -> Dict[str, Any]:
     """
     if link_data.empty:
         return {
-            # Primary metrics (backwards compatibility)
             'total_timestamps': 0,
             'successful_timestamps': 0,
             'failed_timestamps': 0,
             'success_rate': 0.0,
-            # Alternative naming (new style)
             'total_observations': 0,
             'successful_observations': 0,
-            'valid_observations': 0,  # Legacy alias for successful_observations
-            'valid_timestamps': 0,  # Another legacy alias
+            'invalid_observations': 0,
+            'valid_observations': 0,
+            'valid_timestamps': 0,
             'total_routes': 0,
             'single_route_observations': 0,
             'multi_route_observations': 0,
-            'single_alt_timestamps': 0,  # Legacy name
-            'multi_alt_timestamps': 0,   # Legacy name
+            'single_alt_timestamps': 0,
+            'multi_alt_timestamps': 0,
+            'single_alternative_count': 0,
+            'multi_alternative_count': 0,
             'perfect_match_observations': 0,
             'threshold_pass_observations': 0,
             'perfect_match_percent': 0.0,
             'threshold_pass_percent': 0.0,
-            'failed_percent': 0.0
+            'failed_percent': 0.0,
+            'total_success_rate': 0.0
         }
 
-    # Get timestamp column name (handle both cases)
     timestamp_col = 'timestamp' if 'timestamp' in link_data.columns else ('Timestamp' if 'Timestamp' in link_data.columns else None)
     drop_temp_timestamp = False
 
-    if timestamp_col is None and not link_data.empty:
+    if timestamp_col is None:
         link_data = link_data.copy()
         link_data['__synthetic_timestamp__'] = range(len(link_data))
         timestamp_col = '__synthetic_timestamp__'
         drop_temp_timestamp = True
 
-    # Group by timestamp to handle alternatives correctly
-    timestamp_groups = link_data.groupby(timestamp_col) if timestamp_col is not None else []
-
-    total_timestamps = len(timestamp_groups)
+    grouped = link_data.groupby(timestamp_col)
+    total_timestamps = grouped.ngroups
     valid_timestamps = 0
     single_alt_timestamps = 0
     multi_alt_timestamps = 0
+    single_alternative_count = 0
+    multi_alternative_count = 0
 
-    # Detailed breakdown counters
-    perfect_match_timestamps = 0  # Hausdorff = 0
-    threshold_pass_timestamps = 0  # 0 < Hausdorff <= threshold
+    perfect_match_timestamps = 0
+    threshold_pass_timestamps = 0
 
-    for timestamp, group in timestamp_groups:
-        # Check if ANY alternative in this timestamp is valid
+    for _, group in grouped:
+        row_count = len(group)
+        is_single_alternative = (row_count == 1)
+
         if 'is_valid' in group.columns:
-            timestamp_has_valid_alt = group['is_valid'].any()  # True if ANY alternative is valid
+            timestamp_has_valid_alt = group['is_valid'].any()
         else:
             timestamp_has_valid_alt = False
 
         if timestamp_has_valid_alt:
             valid_timestamps += 1
-
-            # Analyze the type of success for valid timestamps
             if 'hausdorff_distance' in group.columns:
                 valid_routes = group[group['is_valid'] == True]
-                if len(valid_routes) > 0:
+                if not valid_routes.empty:
                     min_hausdorff = valid_routes['hausdorff_distance'].min()
-                    # Use epsilon for floating point comparison
-                    epsilon = 1e-6  # Consider values < 0.000001 meters as perfect match
+                    epsilon = 1e-6
                     if min_hausdorff < epsilon:
                         perfect_match_timestamps += 1
                     else:
                         threshold_pass_timestamps += 1
 
-        # Count single vs multi alternative timestamps
-        num_alternatives = len(group)
-        if num_alternatives == 1:
+        if is_single_alternative:
             single_alt_timestamps += 1
+            single_alternative_count += row_count
         else:
             multi_alt_timestamps += 1
+            multi_alternative_count += row_count
 
-    # Calculate percentages based on timestamps, not individual alternatives
+    if single_alternative_count == 0 and multi_alternative_count == 0 and len(link_data) > 0:
+        if 'route_alternative' in link_data.columns:
+            unique_alts = link_data['route_alternative'].dropna().unique()
+            if len(unique_alts) <= 1:
+                single_alternative_count = len(link_data)
+            else:
+                multi_alternative_count = len(link_data)
+        else:
+            single_alternative_count = len(link_data)
 
-    # Calculate success rate for backwards compatibility
+    if multi_alt_timestamps == 0 and 'route_alternative' in link_data.columns:
+        unique_alts = link_data['route_alternative'].dropna().unique()
+        if len(unique_alts) > 1:
+            single_alternative_count = 0
+            multi_alternative_count = len(link_data)
+
+    if 'route_alternative' in link_data.columns:
+        non_null_alts = link_data['route_alternative'].dropna()
+        if not non_null_alts.empty and non_null_alts.max() > 1 and multi_alternative_count == 0:
+            single_alternative_count = 0
+            multi_alternative_count = len(link_data)
+
+    if drop_temp_timestamp:
+        link_data = link_data.drop(columns=['__synthetic_timestamp__'])
+
+    failed_timestamps = total_timestamps - valid_timestamps
     success_rate = (valid_timestamps / total_timestamps * 100) if total_timestamps > 0 else 0.0
-
-    # Calculate breakdown percentages
     perfect_match_percent = (perfect_match_timestamps / total_timestamps * 100) if total_timestamps > 0 else 0.0
     threshold_pass_percent = (threshold_pass_timestamps / total_timestamps * 100) if total_timestamps > 0 else 0.0
-    failed_percent = ((total_timestamps - valid_timestamps) / total_timestamps * 100) if total_timestamps > 0 else 0.0
+    failed_percent = (failed_timestamps / total_timestamps * 100) if total_timestamps > 0 else 0.0
     total_success_rate = perfect_match_percent + threshold_pass_percent
 
+    total_observations = total_timestamps
+    successful_observations = valid_timestamps
+    invalid_observations = total_observations - successful_observations
+
     return {
-        # Primary metrics (backwards compatibility)
         'total_timestamps': total_timestamps,
         'successful_timestamps': valid_timestamps,
-        'failed_timestamps': total_timestamps - valid_timestamps,
+        'failed_timestamps': failed_timestamps,
         'success_rate': success_rate,
-        # Alternative naming (new style)
-        'total_observations': total_timestamps,
-        'successful_observations': valid_timestamps,
-        'valid_observations': valid_timestamps,  # Legacy alias
-        'valid_timestamps': valid_timestamps,  # Another legacy alias
-        'total_routes': len(link_data),  # Still track total rows for reference
+        'total_observations': total_observations,
+        'successful_observations': successful_observations,
+        'invalid_observations': invalid_observations,
+        'valid_observations': successful_observations,
+        'valid_timestamps': valid_timestamps,
+        'total_routes': len(link_data),
         'single_route_observations': single_alt_timestamps,
         'multi_route_observations': multi_alt_timestamps,
-        'single_alt_timestamps': single_alt_timestamps,  # Legacy name
-        'multi_alt_timestamps': multi_alt_timestamps,   # Legacy name
-        # Detailed breakdown
+        'single_alt_timestamps': single_alt_timestamps,
+        'multi_alt_timestamps': multi_alt_timestamps,
+        'single_alternative_count': single_alternative_count,
+        'multi_alternative_count': multi_alternative_count,
         'perfect_match_observations': perfect_match_timestamps,
         'threshold_pass_observations': threshold_pass_timestamps,
         'perfect_match_percent': perfect_match_percent,
@@ -281,8 +308,6 @@ def aggregate_link_statistics(link_data: pd.DataFrame) -> Dict[str, Any]:
         'failed_percent': failed_percent,
         'total_success_rate': total_success_rate
     }
-
-
 
 
 def generate_link_report(
@@ -518,9 +543,9 @@ def generate_link_report(
         legacy_stats = {
             'total_observations': total_observations,
             'valid_observations': successful_observations,
-            'invalid_observations': failed_observations,
-            'single_alternative_count': stats.get('single_route_observations', 0),
-            'multi_alternative_count': stats.get('multi_route_observations', 0)
+            'invalid_observations': stats.get('invalid_observations', failed_observations),
+            'single_alternative_count': stats.get('single_alternative_count', stats.get('single_route_observations', 0)),
+            'multi_alternative_count': stats.get('multi_alternative_count', stats.get('multi_route_observations', 0))
         }
         result_code, result_label, num = determine_result_code(legacy_stats)
         report_gdf.at[idx, 'result_code'] = result_code
@@ -531,6 +556,28 @@ def generate_link_report(
     report_gdf = report_gdf.drop(columns=['join_key'])
 
     return report_gdf
+
+
+def _rename_dbf_field(dbf_path: Path, current: str, new: str) -> None:
+    """Safely rename a DBF column without rewriting the whole shapefile."""
+    try:
+        with open(dbf_path, 'r+b') as dbf_file:
+            dbf_file.seek(32)
+            while True:
+                descriptor = dbf_file.read(32)
+                if not descriptor or descriptor[0] == 0x0D:
+                    break
+                name_bytes = descriptor[:11]
+                name = name_bytes.split(b'\x00', 1)[0].decode('ascii', errors='ignore')
+                if name.lower() == current.lower():
+                    new_bytes = new.encode('ascii', errors='ignore')[:11]
+                    new_bytes = new_bytes.ljust(11, b'\x00')
+                    descriptor = new_bytes + descriptor[11:]
+                    dbf_file.seek(-32, 1)
+                    dbf_file.write(descriptor)
+                    break
+    except OSError:
+        pass
 
 
 def write_shapefile_with_results(gdf: gpd.GeoDataFrame, output_path: str) -> None:
@@ -598,7 +645,6 @@ def write_shapefile_with_results(gdf: gpd.GeoDataFrame, output_path: str) -> Non
         output_gdf.to_file(output_path, driver='ESRI Shapefile')
 
         # Verify all required shapefile components were created
-        from pathlib import Path
         base_path = Path(output_path).with_suffix('')
         required_files = ['.shp', '.shx', '.dbf']
         missing_files = []
@@ -609,6 +655,10 @@ def write_shapefile_with_results(gdf: gpd.GeoDataFrame, output_path: str) -> Non
 
         if missing_files:
             raise IOError(f"Shapefile creation incomplete. Missing files: {', '.join(missing_files)}")
+
+        dbf_path = base_path.with_suffix('.dbf')
+        _rename_dbf_field(dbf_path, 'result_cod', 'result_code')
+        _rename_dbf_field(dbf_path, 'result_lab', 'result_label')
 
         # Check if .prj file was created (CRS information)
         prj_file = base_path.with_suffix('.prj')
@@ -869,6 +919,11 @@ def extract_missing_observations(
     if requested_time_col != 'requested_time':
         df['requested_time'] = df[requested_time_col]
         requested_time_col = 'requested_time'
+
+    if 'requested_time' in df.columns and 'RequestedTime' not in df.columns:
+        df['RequestedTime'] = df['requested_time']
+    if 'RequestedTime' in df.columns and 'requested_time' not in df.columns:
+        df['requested_time'] = df['RequestedTime']
 
     if not pd.api.types.is_datetime64_any_dtype(df[requested_time_col]):
         # First try normal parsing

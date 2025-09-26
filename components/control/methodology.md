@@ -96,7 +96,10 @@ s_653-655, 13:45, RouteAlternative=3:
 
 **Key Improvement:** Transparent individual test metrics instead of confusing configuration codes.
 
-**Link-Level Reporting:** Aggregates row-level results into Result Codes 0, 1, 2, 30, 31, 32, 41, 42
+**Link-Level Reporting:** Aggregates by unique timestamp first (any passing alternative marks that timestamp as successful) and still publishes the legacy ResultCode values (0/1/2/30/31/32/41) for compatibility.
+
+- Result labels surfaced to users/UI mirror the legacy meanings: `valid` (all timestamps succeed), `no RouteAlternative` (single-alternative links with mixed success), `no RouteAlternative and all invalid` (single-alternative links entirely failing), and `RouteAlternative greater than one` for any multi-alternative scenario.
+- When RouteAlternative values are present but timestamps remain unique, the aggregator falls back on the alternative IDs so links with indices >1 are still classified as multi-alternative for reporting.
 
 ## Validation Codes Reference
 
@@ -125,7 +128,7 @@ The validation system now uses simplified context codes with individual test res
 - **Code 94**: Generated only for links that have some actual data but are missing specific RequestedTime intervals within the analysis period
 - **Code 95**: Generated only for links that exist in the reference shapefile but have no observations at all in the CSV data
 - **These codes never appear in validated_data.csv** - they are synthetic placeholders in separate output files
-- **Code 94** uses RequestedTime field (not timestamp) to indicate when observations were expected
+- **Code 94** uses the RequestedTime field (not timestamp) to indicate when observations were expected, and the pipeline mirrors between `RequestedTime`/`requested_time` so snake_case inputs still work.
 - **Code 95** has NULL RequestedTime values since the entire link lacks data
 - **Conditional Generation**: Code 94 (missing observations) are only generated when "Data Completeness Analysis (Optional)" checkbox is enabled in GUI
 
@@ -340,6 +343,8 @@ The validation system generates **6-11 output files** organized into three logic
 - **Geometry**: Original reference shapefile LineString features
 - **Purpose**: GIS-compatible spatial visualization of link performance
 
+- **Field preservation**: Writer post-processes the DBF header so `result_code` and `result_label` remain intact even though the driver temporarily truncates them during export.
+
 ### **Analysis Files** (Always Generated)
 
 #### **4. failed_observations.csv**
@@ -382,7 +387,7 @@ The validation system generates **6-11 output files** organized into three logic
 **Conditional Generation Rules:**
 - **missing_observations.csv**: Only when "Data Completeness Analysis (Optional)" checkbox is enabled
 - **All shapefiles**: Only when shapefile generation is enabled in settings
-- **RequestedTime Field**: Used specifically for missing observations output (preserves timestamp for other functions)
+- **RequestedTime Field**: Used specifically for missing observations output (preserves timestamp for other functions), with the pipeline mirroring between `RequestedTime` and `requested_time` automatically so snake_case CSVs do not trigger KeyErrors.
 
 ## Validation Logic Summary
 

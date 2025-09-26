@@ -1212,9 +1212,12 @@ _DOWNLOAD_LABELS = {
     'best_valid_observations_csv_zip': 'Best Valid Observations CSV (ZIP)',
     'missing_observations_csv': 'Missing Observations CSV',
     'missing_observations_csv_zip': 'Missing Observations CSV (ZIP)',
+    'missing_observations_zip': 'Missing Observations Shapefile (ZIP)',
     'link_report_csv': 'Link Report CSV',
     'link_report_zip': 'Complete Shapefile Package (ZIP)',
     'failed_observations_zip': 'Failed Observations Shapefile (ZIP)',
+    'no_data_links_csv': 'No-Data Links CSV',
+    'no_data_links_zip': 'No-Data Links Shapefile (ZIP)',
 }
 
 
