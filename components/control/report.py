@@ -211,7 +211,7 @@ def aggregate_link_statistics(link_data: pd.DataFrame) -> Dict[str, Any]:
         timestamp_col = '__synthetic_timestamp__'
         drop_temp_timestamp = True
 
-    grouped = link_data.groupby(timestamp_col)
+    grouped = link_data.groupby(timestamp_col, sort=False)
     total_timestamps = grouped.ngroups
     valid_timestamps = 0
     single_alt_timestamps = 0
@@ -614,10 +614,10 @@ def write_shapefile_with_results(gdf: gpd.GeoDataFrame, output_path: str) -> Non
             'data_coverage_percent': 'coverage_p'
         }
 
-        # Reorder columns to match CSV exactly (only include columns that exist)
+        # Only keep the desired columns from the CSV report (no extra fields)
         available_cols = [col for col in desired_order if col in output_gdf.columns]
-        remaining_cols = [col for col in output_gdf.columns if col not in desired_order and col != 'geometry']
-        final_order = available_cols + remaining_cols + ['geometry']
+        # Only keep geometry and the desired columns - no extra fields
+        final_order = available_cols + ['geometry']
         output_gdf = output_gdf[final_order]
 
         # Apply column mapping for field name truncation
@@ -713,7 +713,7 @@ def extract_failed_observations(validated_df: pd.DataFrame) -> pd.DataFrame:
     # Group by link_id and timestamp
     failed_observations = []
 
-    for (link_id, timestamp), group in df.groupby(['link_id', timestamp_col]):
+    for (link_id, timestamp), group in df.groupby(['link_id', timestamp_col], sort=False):
         # Check if ALL alternatives for this timestamp failed
         if 'is_valid' in group.columns:
             all_failed = not group['is_valid'].any()  # True if NO alternative is valid
@@ -813,7 +813,7 @@ def extract_best_valid_observations(validated_df: pd.DataFrame) -> pd.DataFrame:
     # Group by link_id and timestamp
     best_observations = []
 
-    for (link_id, timestamp), group in df.groupby(['link_id', timestamp_col]):
+    for (link_id, timestamp), group in df.groupby(['link_id', timestamp_col], sort=False):
         # Get valid alternatives
         valid_alternatives = group[group['is_valid'] == True] if 'is_valid' in group.columns else pd.DataFrame()
 
@@ -926,20 +926,18 @@ def extract_missing_observations(
         df['requested_time'] = df['RequestedTime']
 
     if not pd.api.types.is_datetime64_any_dtype(df[requested_time_col]):
-        # First try normal parsing
-        df[requested_time_col] = _parse_timestamp_series(df[requested_time_col])
+        parsed = _parse_timestamp_series(df[requested_time_col])
+        df[requested_time_col] = parsed
 
-        # If still not datetime (e.g., time-only format like "HH:MM:SS"), combine with date
         if not pd.api.types.is_datetime64_any_dtype(df[requested_time_col]):
-            # Combine time-only values with the start date
             try:
                 df[requested_time_col] = pd.to_datetime(
-                    completeness_params['start_date'].strftime('%Y-%m-%d') + ' ' + df[requested_time_col].astype(str),
+                    completeness_params['start_date'].strftime('%Y-%m-%d') + ' ' + parsed.astype(str),
                     errors='coerce'
                 )
             except Exception:
-                # Fallback to original parsing
-                df[requested_time_col] = _parse_timestamp_series(df[requested_time_col])
+                df[requested_time_col] = parsed
+
 
     # Get link IDs that actually have data in the validated_df
     # Only check for missing observations in links that have some actual data
@@ -1066,8 +1064,15 @@ def extract_no_data_links(
     Returns:
         DataFrame containing synthetic rows for links with no data
     """
+    # Define the expected structure for no_data_links DataFrame
+    expected_columns = [
+        'Name', 'link_id', 'timestamp', 'is_valid', 'valid_code',
+        'hausdorff_distance', 'hausdorff_pass'
+    ]
+
     if validated_df.empty or shapefile_gdf.empty:
-        return pd.DataFrame()
+        # Return empty DataFrame with expected structure
+        return pd.DataFrame(columns=expected_columns)
 
     # Get all possible link IDs from shapefile
     shapefile_links = set('s_' + str(row['From']) + '-' + str(row['To'])
@@ -1091,7 +1096,8 @@ def extract_no_data_links(
     no_data_links = shapefile_links - links_with_data
 
     if not no_data_links:
-        return pd.DataFrame()
+        # Return empty DataFrame with expected structure when all links have data
+        return pd.DataFrame(columns=expected_columns)
 
     # Create synthetic no-data rows
     no_data_observations = []
@@ -1130,7 +1136,8 @@ def extract_no_data_links(
         result = result.sort_values('link_id').reset_index(drop=True)
         return result
     else:
-        return pd.DataFrame()
+        # Return empty DataFrame with expected structure
+        return pd.DataFrame(columns=expected_columns)
 
 
 def create_csv_matching_shapefile(

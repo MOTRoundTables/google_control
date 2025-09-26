@@ -317,9 +317,15 @@ class TestWriteShapefileWithResults:
             # Verify we can read it back
             read_gdf = gpd.read_file(output_path)
             assert len(read_gdf) == 2
-            assert 'result_code' in read_gdf.columns
-            assert 'result_labe' in read_gdf.columns  # Note: shapefile truncates to 10 chars
-            assert 'num' in read_gdf.columns
+            # Verify that only desired fields are kept (From, To, geometry)
+            # result_code, result_label, num should have been removed
+            assert 'From' in read_gdf.columns
+            assert 'To' in read_gdf.columns
+            assert 'geometry' in read_gdf.columns
+            # These should NOT be in the output (removed as unwanted fields)
+            assert 'result_code' not in read_gdf.columns
+            assert 'result_labe' not in read_gdf.columns
+            assert 'num' not in read_gdf.columns
 
         finally:
             # Clean up temporary files

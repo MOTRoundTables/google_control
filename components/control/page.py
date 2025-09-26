@@ -837,20 +837,25 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
             except Exception as e:
                 print(f"Warning: Failed to create missing observations shapefile: {e}")
 
-        # 3. No-data links shapefile (code 95 with original shapefile geometry)
-        if not no_data_links_df.empty:
-            no_data_shp_path = Path(output_dir) / "no_data_links.shp"
-            try:
+        # 3. No-data links shapefile (code 95 with original shapefile geometry) - always create
+        no_data_shp_path = Path(output_dir) / "no_data_links.shp"
+        try:
+            if not no_data_links_df.empty:
                 create_csv_matching_shapefile(
                     no_data_links_df,
                     report_gdf,
                     str(no_data_shp_path),
                     geometry_source='shapefile'  # Use original shapefile geometry
                 )
-                no_data_shapefile_zip_path = create_shapefile_zip_package(str(no_data_shp_path), output_dir)
-                output_files['no_data_links_zip'] = str(no_data_shapefile_zip_path)
-            except Exception as e:
-                print(f"Warning: Failed to create no-data links shapefile: {e}")
+            else:
+                # Create empty shapefile with proper structure
+                empty_gdf = gpd.GeoDataFrame(columns=['link_id', 'Name', 'is_valid', 'valid_code'], geometry=[])
+                empty_gdf.crs = report_gdf.crs
+                empty_gdf.to_file(str(no_data_shp_path))
+            no_data_shapefile_zip_path = create_shapefile_zip_package(str(no_data_shp_path), output_dir)
+            output_files['no_data_links_zip'] = str(no_data_shapefile_zip_path)
+        except Exception as e:
+            print(f"Warning: Failed to create no-data links shapefile: {e}")
 
     return output_files
 
@@ -961,21 +966,20 @@ def load_csv_with_encoding(csv_file):
         if file_size > 50 * 1024 * 1024:  # 50MB threshold for chunking
             st.info("🔄 Large file detected, processing in chunks...")
             chunk_reader = pd.read_csv(temp_file_path, chunksize=10000, encoding=detected_encoding)
+            chunks = []
             chunk_count = 0
             progress_bar = st.progress(0)
 
-            csv_df = None
             for chunk in chunk_reader:
+                chunks.append(chunk)
                 chunk_count += 1
                 progress_bar.progress(min(chunk_count * 10000 / 100000, 1.0))
 
-                if csv_df is None:
-                    csv_df = chunk
-                else:
-                    csv_df = pd.concat([csv_df, chunk], ignore_index=True)
-
             progress_bar.empty()
-            if csv_df is None:
+            if chunks:
+                csv_df = pd.concat(chunks, ignore_index=True)
+                del chunks
+            else:
                 csv_df = pd.DataFrame()
             st.success(f"Processed {len(csv_df)} rows from {chunk_count} chunks")
         else:
@@ -990,18 +994,17 @@ def load_csv_with_encoding(csv_file):
             try:
                 if file_size > 50 * 1024 * 1024:
                     chunk_reader = pd.read_csv(temp_file_path, chunksize=10000, encoding=fallback_encoding)
-
-                    csv_df = None
+                    chunks = []
                     chunk_count = 0
 
                     for chunk in chunk_reader:
+                        chunks.append(chunk)
                         chunk_count += 1
-                        if csv_df is None:
-                            csv_df = chunk
-                        else:
-                            csv_df = pd.concat([csv_df, chunk], ignore_index=True)
 
-                    if csv_df is None:
+                    if chunks:
+                        csv_df = pd.concat(chunks, ignore_index=True)
+                        del chunks
+                    else:
                         csv_df = pd.DataFrame()
                     st.success(f"Successfully read file using {fallback_encoding} encoding ({len(csv_df)} rows from {chunk_count} chunks)")
                 else:
@@ -1255,12 +1258,13 @@ _DOWNLOAD_LABELS = {
     'best_valid_observations_csv_zip': 'Best Valid Observations CSV (ZIP)',
     'missing_observations_csv': 'Missing Observations CSV',
     'missing_observations_csv_zip': 'Missing Observations CSV (ZIP)',
-    'missing_observations_zip': 'Missing Observations Shapefile (ZIP)',
+    'missing_observations_zip': 'Missing Observations Shapefile',
     'link_report_csv': 'Link Report CSV',
-    'link_report_zip': 'Complete Shapefile Package (ZIP)',
-    'failed_observations_zip': 'Failed Observations Shapefile (ZIP)',
+    'link_report_zip': 'Link Report Shapefile',
+    'failed_observations_zip': 'Failed Observations Shapefile',
+    'failed_observations_reference_zip': 'Failed Observations Reference Shapefile',
     'no_data_links_csv': 'No-Data Links CSV',
-    'no_data_links_zip': 'No-Data Links Shapefile (ZIP)',
+    'no_data_links_zip': 'No-Data Links Shapefile',
 }
 
 
@@ -1509,24 +1513,59 @@ def display_control_results():
         if not download_entries:
             st.info("No downloadable files were generated.")
         else:
-            if any(entry['file_type'] == 'link_report_zip' for entry in download_entries):
-                st.info("Shapefile downloads include all required files (.shp, .shx, .dbf, .prj).")
-            compressed_keys = {'validated_csv_zip', 'failed_observations_csv_zip', 'best_valid_observations_csv_zip', 'missing_observations_csv_zip'}
-            if any(entry['file_type'] in compressed_keys for entry in download_entries):
-                st.info("Large CSV outputs are compressed for safer downloads. The raw CSV files remain in the output directory.")
-            download_cols = st.columns(min(3, len(download_entries)))
-            for i, entry in enumerate(download_entries):
-                col = download_cols[i % len(download_cols)]
-                with col:
-                    file_path = entry['path']
-                    with file_path.open('rb') as file_handle:
-                        st.download_button(
-                            label=f"{entry['label']} ({entry['size_label']})",
-                            data=file_handle,
-                            file_name=file_path.name,
-                            mime=entry['mime'],
-                            use_container_width=True,
-                            key=f"download_{entry['file_type']}"
-                        )
-                    st.caption(f"Saved to {file_path}")
+            # Separate entries into CSV and Shapefile categories
+            csv_entries = []
+            shapefile_entries = []
+
+            for entry in download_entries:
+                if entry['file_type'].endswith('_zip') and 'csv' not in entry['file_type']:
+                    # Shapefile packages (all end with _zip except csv_zip files)
+                    shapefile_entries.append(entry)
+                else:
+                    # CSV files (including compressed CSVs)
+                    csv_entries.append(entry)
+
+            # Display CSV downloads
+            if csv_entries:
+                st.markdown("### 📄 CSV Data Files")
+                compressed_keys = {'validated_csv_zip', 'failed_observations_csv_zip', 'best_valid_observations_csv_zip', 'missing_observations_csv_zip'}
+                if any(entry['file_type'] in compressed_keys for entry in csv_entries):
+                    st.info("Large CSV outputs are compressed for safer downloads. The raw CSV files remain in the output directory.")
+
+                csv_cols = st.columns(min(3, len(csv_entries)))
+                for i, entry in enumerate(csv_entries):
+                    col = csv_cols[i % len(csv_cols)]
+                    with col:
+                        file_path = entry['path']
+                        with file_path.open('rb') as file_handle:
+                            st.download_button(
+                                label=f"{entry['label']} ({entry['size_label']})",
+                                data=file_handle,
+                                file_name=file_path.name,
+                                mime=entry['mime'],
+                                use_container_width=True,
+                                key=f"download_{entry['file_type']}"
+                            )
+                        st.caption(f"Saved to {file_path}")
+
+            # Display Shapefile downloads
+            if shapefile_entries:
+                st.markdown("### 🗺️ Shapefile Packages")
+                st.info("Shapefile packages include all required components (.shp, .shx, .dbf, .prj) in ZIP format.")
+
+                shapefile_cols = st.columns(min(3, len(shapefile_entries)))
+                for i, entry in enumerate(shapefile_entries):
+                    col = shapefile_cols[i % len(shapefile_cols)]
+                    with col:
+                        file_path = entry['path']
+                        with file_path.open('rb') as file_handle:
+                            st.download_button(
+                                label=f"{entry['label']} ({entry['size_label']})",
+                                data=file_handle,
+                                file_name=file_path.name,
+                                mime=entry['mime'],
+                                use_container_width=True,
+                                key=f"download_{entry['file_type']}"
+                            )
+                        st.caption(f"Saved to {file_path}")
 
