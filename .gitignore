@@ -201,6 +201,7 @@ README_test_data.md
 .kiro/
 .specify/
 .playwright-mcp/
+specs/
 
 # Output and generated data
 control_output/
