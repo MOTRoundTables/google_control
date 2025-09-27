@@ -266,7 +266,7 @@ def main():
         st.session_state.current_page = "🔍 Dataset Control"
     
     # Use radio buttons instead of selectbox to avoid double-click issues
-    pages = ["🔍 Dataset Control", "🏠 Main Processing", "📊 Results", "🗺️ Maps", "📚 Methodology", "🔬 Control Methodology", "📋 Schema Documentation"]
+    pages = ["🔍 Dataset Control", "🏠 Hour Aggregation", "📊 Hour Aggregation Results", "🗺️ Aggregated Maps", "🔬 Control Methodology", "📚 Hour Aggregation Methodology"]
     
     # Get current page for radio button selection
     current_page = st.session_state.current_page
@@ -291,20 +291,18 @@ def main():
     # Use the current page from session state (not the selected page) to avoid conflicts
     page = st.session_state.current_page
     
-    if page == "🏠 Main Processing":
+    if page == "🏠 Hour Aggregation":
         main_processing_page()
-    elif page == "🗺️ Maps":
+    elif page == "🗺️ Aggregated Maps":
         maps_page()
-    elif page == "📊 Results":
+    elif page == "📊 Hour Aggregation Results":
         results_page()
     elif page == "🔍 Dataset Control":
         control_page()
-    elif page == "📚 Methodology":
+    elif page == "📚 Hour Aggregation Methodology":
         methodology_page()
     elif page == "🔬 Control Methodology":
         control_methodology_page()
-    elif page == "📋 Schema Documentation":
-        schema_documentation_page()
 
 
 def maps_page():
@@ -321,7 +319,7 @@ def maps_page():
 
 def main_processing_page():
     """Main processing page"""
-    st.title("Google Maps Link Monitoring CSV Processor")
+    st.title("🏠 Hour Aggregation")
     st.markdown("Process large-scale traffic monitoring datasets with configurable parameters")
     
     # Sidebar now only contains navigation - methodology moved to dedicated page
@@ -1314,12 +1312,12 @@ def create_visualizations(hourly_df: pd.DataFrame):
 
 def results_page():
     """Results display page"""
-    st.title("📊 Processing Results")
+    st.title("📊 Hour Aggregation Results")
     
     if 'processing_results' not in st.session_state:
-        st.info("🔍 No results available. Please run processing on the Main Processing page first.")
-        if st.button("🏠 Go to Main Processing"):
-            st.session_state.current_page = "🏠 Main Processing"
+        st.info("🔍 No results available. Please run processing on the Hour Aggregation page first.")
+        if st.button("🏠 Go to Hour Aggregation"):
+            st.session_state.current_page = "🏠 Hour Aggregation"
             st.rerun()
         return
     
@@ -1371,7 +1369,7 @@ def results_page():
     if not hourly_df.empty:
         col_title, col_sort_info = st.columns([3, 1])
         with col_title:
-            st.subheader("📊 Hourly Aggregation")
+            st.subheader("📊 Hour Aggregation Results")
         with col_sort_info:
             st.caption("🔄 **Sorted by:** link_id → date → hour")
         
@@ -1577,7 +1575,7 @@ def results_page():
     with col1:
         if st.button("🏠 Back to Processing", use_container_width=True):
             # Navigate back to main processing page
-            st.session_state.current_page = "🏠 Main Processing"
+            st.session_state.current_page = "🏠 Hour Aggregation"
             st.rerun()
     
     with col2:
@@ -1585,7 +1583,7 @@ def results_page():
             # Clear results and navigate to processing page
             if 'processing_results' in st.session_state:
                 del st.session_state.processing_results
-            st.session_state.current_page = "🏠 Main Processing"
+            st.session_state.current_page = "🏠 Hour Aggregation"
             st.rerun()
 
 
@@ -1594,92 +1592,18 @@ def results_page():
 
 def methodology_page():
     """Methodology documentation page for hourly aggregation"""
-    st.title("📚 Methodology - Hourly Aggregation")
+    st.title("📚 Hour Aggregation Methodology")
 
-    st.markdown("""
-    ## Overview
-
-    This tool processes Google Maps link monitoring data to generate hourly aggregations and weekly profiles for traffic analysis.
-    
-    ## Processing Pipeline
-    
-    ### 1. Data Validation & Cleaning
-    - **Column Validation**: Ensures all required columns are present with flexible naming
-    - **Duplicate Removal**: Removes duplicates by DataID and link+timestamp combinations
-    - **Data Type Validation**: Validates numeric fields and timestamp formats
-    - **Encoding Detection**: Automatically detects file encoding (UTF-8, CP1255, etc.)
-    
-    ### 2. Timestamp Processing
-    - **Format Parsing**: Supports multiple timestamp formats with fallback mechanisms
-    - **Timezone Handling**: Converts to specified timezone (default: Asia/Jerusalem)
-    - **Temporal Features**: Extracts date, hour, weekday, and week information
-    - **Holiday Detection**: Identifies Israeli holidays using Hebrew calendar
-    
-    ### 3. Data Filtering
-    - **Date Range**: Filters data within specified date ranges
-    - **Time Filters**: Selects specific weekdays and hours of day
-    - **Link Filtering**: Supports whitelist/blacklist for specific links
-    - **Validity Filtering**: Uses `is_valid` column when available
-    
-    ### 4. Hourly Aggregation
-    - **Grouping**: Groups data by link, date, hour, and day type
-    - **Metrics Calculation**:
-      - Count of total and valid measurements
-      - Average, standard deviation of duration
-      - Average distance and speed
-      - Data quality indicators
-    
-    ### 5. Weekly Profile Generation
-    - **Pattern Analysis**: Identifies typical patterns by day type and hour
-    - **Statistical Aggregation**: Computes weekly averages and variations
-    - **Quality Assessment**: Tracks data availability and reliability
-    
-    ## Key Features
-    
-    ### Robust Data Handling
-    - **Memory Efficient**: Processes large files in configurable chunks
-    - **Error Recovery**: Continues processing despite individual record errors
-    - **Flexible Schema**: Adapts to variations in column naming
-    
-    ### Quality Assurance
-    - **Validation Rules**: Multiple layers of data validation
-    - **Quality Metrics**: Comprehensive quality reporting
-    - **Audit Trail**: Complete processing logs and configuration tracking
-    
-    ### Scalability
-    - **Chunk Processing**: Handles files larger than available memory
-    - **Configurable Parameters**: Adjustable for different data characteristics
-    - **Performance Optimization**: Efficient algorithms for large-scale processing
-    
-    ## Output Files
-    
-    ### Primary Outputs
-    1. **hourly_agg.csv**: Hourly aggregated metrics by link and time
-    2. **weekly_hourly_profile.csv**: Weekly patterns by day type and hour
-    3. **quality_by_link.csv**: Data quality metrics per link
-    
-    ### Supporting Files
-    4. **processing_log.txt**: Detailed processing information
-    5. **run_config.json**: Complete configuration used for processing
-    6. **raw_data_preview.csv**: Sample of processed raw data
-    
-    ## Technical Specifications
-    
-    ### Performance
-    - **Chunk Size**: Default 50,000 rows (configurable)
-    - **Memory Usage**: Optimized data types and garbage collection
-    - **Processing Speed**: Typically 10,000-100,000 rows per second
-    
-    ### Data Types
-    - **Timestamps**: Timezone-aware datetime objects
-    - **Numeric**: Optimized float32/int32 where possible
-    - **Categorical**: Efficient category encoding for repeated values
-    
-    ### Validation Rules
-    - **Required Fields**: All specified columns must be present
-    - **Data Ranges**: Reasonable bounds for duration, distance, speed
-    - **Temporal Consistency**: Logical timestamp sequences
-    """)
+    # Read and display the methodology from the processing component
+    from pathlib import Path
+    methodology_path = Path("components/processing/methodology.md")
+    if methodology_path.exists():
+        with open(methodology_path, "r", encoding="utf-8") as f:
+            st.markdown(f.read())
+    else:
+        # Fallback content if file not found
+        st.error("Methodology documentation file not found at components/processing/methodology.md")
+        st.info("Please ensure the methodology.md file exists in the components/processing/ directory.")
 
 
 def control_methodology_page():
@@ -1694,539 +1618,10 @@ def control_methodology_page():
             st.markdown(f.read())
     else:
         st.error("Methodology documentation not found")
-    return
 
-    st.markdown("""
-    ## Overview
 
-    The Dataset Control and Reporting system validates Google Maps polyline data against reference shapefiles using geometric similarity analysis. It provides hierarchical validation codes and generates comprehensive link-level reports.
 
-    ## Algorithm Explanation: Google Maps vs Reference Shapefile
-
-    ### The Two Data Sources
-
-    **1. Reference Shapefile** (Your Upload)
-    - Contains "ground truth" road network geometry
-    - Structure: Links with `From`→`To` node IDs and LineString geometries
-    - Purpose: Defines the **expected** route for each link
-    - Example: Link `s_653-655` should follow a specific geometric path
-
-    **2. Google Maps Observations** (CSV Data)
-    - Contains real-world travel observations with encoded polylines
-    - Structure: Each row has `name`, `polyline`, `route_alternative`, timestamps
-    - Purpose: Shows the **actual** route Google Maps suggested/took
-    - Example: Same link `s_653-655` but with Google's encoded polyline
-
-    ## Validation Pipeline Architecture
-
-    The validation process follows a hierarchical structure with specific exit points:
-
-    ### Phase 1: Data Preparation
-    1. Load reference shapefile → Create join keys (s_From-To)
-    2. Load CSV observations → Parse link names to extract From/To IDs
-    3. Create matching pairs: CSV observation ↔ Shapefile reference
-
-    ### Phase 2: Geometric Validation (Per Observation)
-
-    **Step 1: Data Availability Check** (Codes 90-93)
-    - ✓ Required fields present? (name, polyline, route_alternative)
-    - ✓ Link name parseable? (s_653-655 → From:653, To:655)
-    - ✓ Link exists in shapefile?
-    - ✓ Polyline decodeable?
-
-    **Step 2: Geometric Similarity Tests**
-
-    **A) Coordinate System Conversion**
-    - Convert both geometries to metric CRS (EPSG:2039)
-    - Google route: decode_polyline(observation.polyline)
-    - Reference route: from shapefile geometry
-    - Both now in meters for accurate distance calculations
-
-    **B) Hausdorff Distance Test**
-    - Measures maximum distance between the two routes
-    - If distance ≤ threshold: Routes are geometrically similar
-    - If distance > threshold: Code 2 (DISTANCE_FAILURE)
-
-    **C) Length Similarity Test** (Optional)
-    - When `length_check_mode` = "ratio": Check if lengths are within ratio bounds
-    - When `length_check_mode` = "exact": Check absolute length difference
-    - When `length_check_mode` = "off": **Skip this test entirely**
-
-    **D) Coverage Analysis**
-    - Densify reference route into points every 1.0 meter
-    - For each reference point, check if Google route comes close (≤ 1.0m)
-    - Calculate percentage: covered_length / reference_route.length
-    - If coverage ≥ 0.85 (85%): Sufficient coverage
-    - If coverage < 0.85: Code 4 (COVERAGE_FAILURE)
-
-    ### Phase 3: Result Classification (Hierarchical Code System)
-
-    **When do you get Geometry Codes (0-4) vs Route Alternative Codes (21-24)?**
-
-    - **Codes 0-4**: Used when `route_alternative` field is missing, null, or invalid (<1)
-    - **Codes 21-24**: Used when `route_alternative` field contains valid values (≥1)
-
-    **Route Alternative Batch Processing:**
-
-    The system groups observations by **(link_id, timestamp)** to properly handle route alternatives:
-
-    **Single Alternative Batch** (only one row for link+timestamp):
-    - Gets code 2X based on test configuration (21, 22, 23, or 24)
-    - Individual pass/fail result in `is_valid` field
-
-    **Multiple Alternative Batch** (2+ rows for same link+timestamp):
-    - Each alternative gets code 3X based on test configuration (31, 32, 33, or 34)
-    - Each alternative gets individual pass/fail result in `is_valid` field
-
-    **Example Multi-Alternative Scenario:**
-    ```
-    s_653-655, 13:45, RouteAlternative=1, polyline_A → Individual test FAILS → Code 31
-    s_653-655, 13:45, RouteAlternative=2, polyline_B → Individual test PASSES → Code 31
-    s_653-655, 13:45, RouteAlternative=3, polyline_C → Individual test FAILS → Code 31
-
-    Result: Each alternative gets its OWN result (pass/fail) with Code 31 (multi-alt, Hausdorff only)
-    ```
-
-    **Key Insight:** The code indicates test configuration + context, `is_valid` indicates pass/fail.
-
-    **Link-Level Reporting:** Aggregates row-level results into Result Codes 0, 1, 2, 30, 31, 32, 41, 42
-
-    ### Real-World Example
-    **Successful Match:**
-    - Reference: A→B→C→D→E (5km highway segment)
-    - Google: A→B→C→D→E (same route, slight GPS noise)
-    - Results: Hausdorff 3.2m < 10m ✓, Coverage 0.97 > 0.85 ✓
-    - Final: Code 21 (ONE_ALTERNATIVE_MATCH)
-
-    **Failed Match:**
-    - Reference: A→B→C→D→E (main highway)
-    - Google: A→F→G→H→E (alternative route via side roads)
-    - Results: Hausdorff 45m > 10m ❌, Coverage 0.23 < 0.85 ❌
-    - Final: Code 22 (ONE_ALTERNATIVE_FAIL)
-    """)
-
-    # Parameters Section
-    st.header("📊 Validation Parameters")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("Geometric Analysis")
-        st.markdown("""
-        **Hausdorff Distance Threshold**
-        - Default: 10.0 meters
-        - Maximum geometric distance between polyline and reference
-        - Uses EPSG:2039 (Israel TM Grid) for metric calculations
-
-        **Length Check Mode**
-        - `off`: No length validation (default)
-        - `ratio`: Check length ratio within bounds
-        - `exact`: Check absolute length difference
-
-        **Length Ratio Bounds**
-        - Minimum: 0.90 (90% of reference length)
-        - Maximum: 1.10 (110% of reference length)
-
-        **Coverage Analysis**
-        - Minimum Coverage: 0.85 (85% overlap required)
-        - Spacing for Densification: 1.0 meter
-        """)
-
-    with col2:
-        st.subheader("Processing Settings")
-        st.markdown("""
-        **Polyline Processing**
-        - Precision: 5 (Google Maps standard)
-        - Coordinate system: WGS84 → EPSG:2039
-
-        **Link Filtering**
-        - Minimum Link Length: 20.0 meters
-        - Short links bypass length ratio checks
-
-        **Quality Thresholds**
-        - Epsilon Length (exact mode): 0.5 meters
-        - CRS: EPSG:2039 for all metric calculations
-        """)
-
-    # Validation Codes Section
-    st.header("🔢 Validation Code Reference")
-
-    st.markdown("""
-    **📍 Code Location:** Validation codes are defined in **`control_validator.py`** at **lines 46-66** in the **`ValidCode`** class.
-
-    ```python
-    class ValidCode(IntEnum):
-        # Geometry match codes (0-4)
-        EXACT_MATCH = 0
-        WITHIN_TOLERANCE = 1
-        DISTANCE_FAILURE = 2
-        LENGTH_FAILURE = 3
-        COVERAGE_FAILURE = 4
-
-        # Route alternative codes (20-24)
-        ZERO_ALTERNATIVES_FAIL = 20
-        ONE_ALTERNATIVE_MATCH = 21
-        ONE_ALTERNATIVE_FAIL = 22
-        MULTI_ALTERNATIVES_MATCH = 23
-        MULTI_ALTERNATIVES_FAIL = 24
-
-        # Data availability codes (90-93)
-        REQUIRED_FIELDS_MISSING = 90
-        NAME_PARSE_FAILURE = 91
-        LINK_NOT_IN_SHAPEFILE = 92
-        POLYLINE_DECODE_FAILURE = 93
-    ```
-    """)
-
-    st.subheader("Geometry-Only Codes (0-4)")
-    st.markdown("*Used only when RouteAlternative column is missing from input data*")
-    import pandas as pd
-    geometry_codes = pd.DataFrame({
-        "Code": [0, 1, 2, 3, 4],
-        "Meaning": [
-            "Exact match (Hausdorff = 0)",
-            "Hausdorff only ✓",
-            "Hausdorff + Length ✓✓",
-            "Hausdorff + Coverage ✓✓",
-            "Hausdorff + Length + Coverage ✓✓✓"
-        ]
-    })
-    st.dataframe(geometry_codes, use_container_width=True)
-
-    st.subheader("Single Alternative Codes (20-24)")
-    single_codes = pd.DataFrame({
-        "Code": [20, 21, 22, 23, 24],
-        "Test Configuration": [
-            "Exact match (Hausdorff = 0)",
-            "Hausdorff only ✓",
-            "Hausdorff + Length ✓✓",
-            "Hausdorff + Coverage ✓✓",
-            "Hausdorff + Length + Coverage ✓✓✓"
-        ]
-    })
-    st.dataframe(single_codes, use_container_width=True)
-
-    st.subheader("Multi Alternative Codes (30-34)")
-    multi_codes = pd.DataFrame({
-        "Code": [30, 31, 32, 33, 34],
-        "Test Configuration": [
-            "Exact match (Hausdorff = 0)",
-            "Hausdorff only ✓",
-            "Hausdorff + Length ✓✓",
-            "Hausdorff + Coverage ✓✓",
-            "Hausdorff + Length + Coverage ✓✓✓"
-        ]
-    })
-    st.dataframe(multi_codes, use_container_width=True)
-
-    st.subheader("Data Availability Codes (90-93)")
-    data_codes = pd.DataFrame({
-        "Code": [90, 91, 92, 93],
-        "Name": ["REQUIRED_FIELDS_MISSING", "NAME_PARSE_FAILURE", "LINK_NOT_IN_SHAPEFILE", "POLYLINE_DECODE_FAILURE"],
-        "Meaning": [
-            "Missing required fields: name, polyline, route_alternative",
-            "Cannot parse link name format (expected: s_FROM-TO)",
-            "Link exists in CSV but not found in reference shapefile",
-            "Invalid Google Maps polyline encoding"
-        ],
-        "Action": [
-            "Check CSV format and required columns",
-            "Verify link naming convention (e.g., s_653-655)",
-            "Update shapefile or check link IDs match",
-            "Validate polyline encoding precision"
-        ]
-    })
-    st.dataframe(data_codes, use_container_width=True)
-
-    st.markdown("""
-    ### 📈 **Understanding Your Results**
-
-    **✅ Success Indicators:**
-    - **Code 0, 20, 30**: Exact geometric match (Hausdorff = 0)
-    - **Code 1, 21, 31**: Hausdorff only test passed
-    - **Code 2, 22, 32**: Hausdorff + Length tests passed
-    - **Code 3, 23, 33**: Hausdorff + Coverage tests passed
-    - **Code 4, 24, 34**: All 3 tests passed (most comprehensive)
-
-    **❌ Common Failure Patterns:**
-    - **Codes ending in 1**: Hausdorff distance too high (increase threshold)
-    - **Codes ending in 2**: Length check failed (adjust ratio or mode)
-    - **Codes ending in 3**: Coverage too low (decrease minimum coverage)
-    - **Code 92**: Link mismatch between CSV and shapefile
-    - **Code 93**: Invalid polyline encoding
-
-    **🔧 Quick Fixes:**
-    - **All codes x1**: Increase Hausdorff threshold (try 15-20m)
-    - **All codes x2**: Check length validation settings
-    - **All codes x3**: Lower coverage minimum or check spacing
-    - **Code 90-93**: Check data format and completeness
-
-    **📊 Code Interpretation Guide:**
-    - **First digit**: Context (0=geometry only, 2=single alt, 3=multi alt)
-    - **Second digit**: Test configuration (matches UI checkboxes)
-    - **is_valid field**: Whether ALL enabled tests passed
-
-    **🎯 New Configuration System Benefits:**
-    - Code directly matches UI checkbox selection
-    - Each alternative gets individual assessment
-    - Clear distinction between single vs multi alternatives
-    - Easy to identify which tests were attempted
-    """)
-
-    st.info("💡 **Pro Tip:** Start with only Hausdorff Distance enabled (default) to get baseline results, then gradually enable Length and Coverage tests for stricter validation.")
-
-
-
-    # Algorithm Details Section
-    st.header("⚙️ Algorithm Details")
-
-    st.subheader("1. Hausdorff Distance Calculation")
-    st.markdown("""
-    ```python
-    # Hausdorff distance measures maximum distance from any point
-    # on one geometry to the nearest point on another geometry
-
-    hausdorff_distance = max(
-        directed_hausdorff(polyline_points, reference_points),
-        directed_hausdorff(reference_points, polyline_points)
-    )
-
-    # All calculations performed in EPSG:2039 for metric accuracy
-    ```
-    """)
-
-    st.subheader("2. Length Similarity Check")
-    st.markdown("""
-    **Ratio Mode (Default):**
-    ```python
-    ratio = polyline_length / reference_length
-    valid = (0.90 <= ratio <= 1.10)
-    ```
-
-    **Exact Mode:**
-    ```python
-    difference = abs(polyline_length - reference_length)
-    valid = (difference <= 0.5)  # meters
-    ```
-    """)
-
-    st.subheader("3. Coverage Analysis")
-    st.markdown("""
-    ```python
-    # Densify both geometries to 1-meter spacing
-    # Project each polyline point onto reference line
-    # Count overlapping segments within spacing tolerance
-
-    coverage = overlap_length / reference_length
-    valid = (coverage >= 0.85)
-    ```
-    """)
-
-    # Result Codes Section
-    st.header("📋 Link-Level Result Codes")
-
-    st.markdown("""
-    After processing all observations for a link, the system generates result codes based on validation patterns:
-    """)
-
-    result_data = {
-        "Code": [0, 1, 2, 30, 31, 32, 41, 42],
-        "Label": ["ALL_VALID", "SINGLE_ALT_PARTIAL", "SINGLE_ALT_ALL_INVALID", "MULTI_ALT_ALL_VALID", "MULTI_ALT_PARTIAL", "MULTI_ALT_ALL_INVALID", "NOT_RECORDED", "PARTIALLY_RECORDED"],
-        "Description": [
-            "100% valid observations",
-            "Single alternative, some invalid",
-            "Single alternative, 0% valid",
-            "Multiple alternatives, 100% valid",
-            "Multiple alternatives, mixed validity",
-            "Multiple alternatives, 0% valid",
-            "No observations for link",
-            "Some time periods missing"
-        ],
-        "Percentage": ["100%", "1-99%", "0%", "100%", "1-99%", "0%", "N/A", "Variable"]
-    }
-    st.dataframe(pd.DataFrame(result_data), use_container_width=True)
-
-    # Reports Section
-    st.header("📊 Generated Reports")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("Validation CSV Output")
-        st.markdown("""
-        **Enhanced CSV with validation results:**
-        - Original CSV data preserved
-        - `is_valid`: Boolean validation result
-        - `valid_code`: Hierarchical validation code
-        - Downloadable for further analysis
-        """)
-
-    with col2:
-        st.subheader("Link Report Shapefile")
-        st.markdown("""
-        **Shapefile with link-level results:**
-        - `result_code`: Link classification (0-42)
-        - `result_label`: Human-readable description
-        - `num`: Percentage of valid observations
-        - Compatible with GIS software
-        """)
-
-
-    # Usage Examples Section
-    st.header("💡 Usage Examples")
-
-    with st.expander("Example 1: Basic Validation"):
-        st.markdown("""
-        ```python
-        # Validate a single observation
-        params = ValidationParameters(
-            hausdorff_threshold_m=5.0,
-            length_check_mode="ratio",
-            coverage_min=0.85
-        )
-
-        is_valid, code = validate_row(row, shapefile, params)
-        # Returns: (True, 21) for valid single alternative
-        ```
-        """)
-
-    with st.expander("Example 2: Custom Parameters"):
-        st.markdown("""
-        ```python
-        # Strict validation parameters
-        strict_params = ValidationParameters(
-            hausdorff_threshold_m=2.0,     # Stricter distance
-            length_check_mode="exact",      # Exact length check
-            epsilon_length_m=0.3,          # Tighter tolerance
-            coverage_min=0.95              # Higher coverage
-        )
-        ```
-        """)
-
-    with st.expander("Example 3: Report Generation"):
-        st.markdown("""
-        ```python
-        # Generate link-level report with date filtering
-        date_filter = {'specific_day': date(2025, 7, 1)}
-
-        report = generate_link_report(
-            validated_df,
-            shapefile,
-            date_filter
-        )
-
-        # Result: GeoDataFrame with result codes and statistics
-        ```
-        """)
-
-    st.header("🔧 Troubleshooting")
-
-    trouble_col1, trouble_col2 = st.columns(2)
-
-    with trouble_col1:
-        st.subheader("Common Issues")
-        st.markdown("""
-        **Code 91 (Name Parse Failure):**
-        - Check link naming: `s_653-655`
-        - Verify underscore/dash usage
-
-        **Code 92 (Link Not Found):**
-        - Update shapefile with missing links
-        - Check From/To node consistency
-
-        **Code 93 (Polyline Decode):**
-        - Validate polyline encoding
-        - Check for special characters
-        """)
-
-    with trouble_col2:
-        st.subheader("Performance Tips")
-        st.markdown("""
-        **Large Datasets:**
-        - Use relaxed Hausdorff threshold
-        - Consider length_check_mode="off"
-        - Increase coverage_spacing_m
-
-        **Quality vs Speed:**
-        - Strict parameters = higher quality
-        - Relaxed parameters = faster processing
-        - Monitor validation percentages
-        """)
-
-
-def schema_documentation_page():
-    """Schema documentation page"""
-    st.title("📋 CSV Schema Documentation")
-    
-    st.markdown("""
-    ## Required Columns
-    
-    The following columns are **required** in your CSV file:
-    """)
-    
-    # Create a table for required columns
-    required_data = {
-        "Column Name": ["DataID", "Name", "SegmentID", "RouteAlternative", "RequestedTime", 
-                       "Timestamp", "DayInWeek", "DayType", "Duration", "Distance", "Speed", 
-                       "Url", "Polyline"],
-        "Alternative Names": ["", "", "", "", "", "", "", "", "Duration (seconds)", 
-                             "Distance (meters)", "Speed (km/h)", "", ""],
-        "Data Type": ["Integer/String", "String", "Integer", "Integer", "Time", "DateTime", 
-                     "String", "String", "Float", "Float", "Float", "String", "String"],
-        "Description": ["Unique record identifier", "Link identifier", "Segment ID", 
-                       "Route alternative", "Requested measurement time", "Actual timestamp", 
-                       "Day name (Hebrew/English)", "Day type", "Travel duration in seconds", 
-                       "Travel distance in meters", "Average speed in km/h", "Recording URL", 
-                       "Route polyline data"]
-    }
-    
-    st.dataframe(pd.DataFrame(required_data), use_container_width=True)
-    
-    st.markdown("""
-    ## Optional Columns
-    
-    | Column Name | Data Type | Description |
-    |-------------|-----------|-------------|
-    | `is_valid` | Boolean | Validity flag for the record |
-    | `valid_code` | String | Validation code/reason |
-    
-    ## Column Name Flexibility
-    
-    The system supports flexible column naming. These variations are automatically recognized:
-    
-    - **Duration**: `Duration`, `Duration (seconds)`
-    - **Distance**: `Distance`, `Distance (meters)`  
-    - **Speed**: `Speed`, `Speed (km/h)`
-    
-    ## Data Formats
-    
-    ### DateTime Format
-    - **Timestamp**: `YYYY-MM-DD HH:MM:SS` (e.g., `2025-07-01 13:45:42`)
-    - **RequestedTime**: `HH:MM:SS` (e.g., `13:45:00`)
-    
-    ### Example CSV Structure
-    
-    ```csv
-    DataID,Name,SegmentID,RouteAlternative,RequestedTime,Timestamp,DayInWeek,DayType,Duration (seconds),Distance (meters),Speed (km/h),Url,Polyline,is_valid
-    287208545,s_653-655,1185048,1,13:45:00,2025-07-01 13:45:42,יום ג,יום חול,2446.0,59428.0,87.465576,https://...,_oxwD{_wtE...,TRUE
-    ```
-    
-    ## Common Issues
-    
-    ### ❌ "Missing required columns"
-    - **Cause**: Column names don't match expected format
-    - **Solution**: Use the alternative names listed above or rename columns
-    
-    ### ❌ "Timestamps failed to parse"
-    - **Cause**: Timestamp format doesn't match `YYYY-MM-DD HH:MM:SS`
-    - **Solution**: Ensure timestamps are in the correct format
-    
-    ## File Requirements
-    
-    - **Format**: CSV (Comma-separated values)
-    - **Encoding**: UTF-8 (preferred) or other common encodings
-    - **Headers**: First row must contain column names
-    """)
+# Schema documentation page removed - content integrated into Hour Aggregation Methodology
 
 
 if __name__ == "__main__":
