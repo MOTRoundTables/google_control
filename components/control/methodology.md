@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Dataset Control and Reporting system validates Google Maps polyline data against reference shapefiles using geometric similarity analysis. It provides transparent metrics and generates comprehensive link-level reports with clear, unambiguous statistics.
+The Dataset Control system validates Google Maps polyline data against reference shapefiles using geometric similarity analysis. It provides transparent metrics and generates comprehensive link-level reports.
 
 ## Algorithm Explanation: Google Maps vs Reference Shapefile
 
@@ -64,25 +64,25 @@ The validation process follows a hierarchical structure with specific exit point
 
 ### Phase 3: Transparent Result System with Individual Test Metrics
 
-**New Simplified Context-Only Codes:**
+Context-Only Codes:
 
 - **Code 1**: NO_ROUTE_ALTERNATIVE (when RouteAlternative column is missing)
 - **Code 2**: SINGLE_ROUTE_ALTERNATIVE (one alternative for link+timestamp)
 - **Code 3**: MULTI_ROUTE_ALTERNATIVE (multiple alternatives for link+timestamp)
 
-**Route Alternative Processing:**
+Route Alternative Processing:
 
-The system groups observations by **(link_id, timestamp)** and provides individual test results:
+The system groups observations by (link_id, timestamp) and provides individual test results:
 
-**Single Alternative Batch** (only one row for link+timestamp):
+Single Alternative Batch (only one row for link+timestamp):
 - Gets `valid_code: 2` (context indicator only)
 - Individual test results in dedicated fields
 
-**Multiple Alternative Batch** (2+ rows for same link+timestamp):
+Multiple Alternative Batch (2+ rows for same link+timestamp):
 - Each alternative gets `valid_code: 3` (context indicator only)
 - Each alternative gets individual test results in dedicated fields
 
-**Example Multi-Alternative Scenario:**
+Example Multi-Alternative Scenario:
 ```
 s_653-655, 13:45, RouteAlternative=1:
   valid_code=3, is_valid=False, hausdorff_distance=6.94, hausdorff_pass=False
@@ -94,9 +94,7 @@ s_653-655, 13:45, RouteAlternative=3:
   valid_code=3, is_valid=False, hausdorff_distance=8.3, hausdorff_pass=False
 ```
 
-**Key Improvement:** Transparent individual test metrics instead of confusing configuration codes.
-
-**Link-Level Reporting:** Aggregates by unique timestamp first (any passing alternative marks that timestamp as successful) and still publishes the legacy ResultCode values (0/1/2/30/31/32/41) for compatibility.
+Link-Level Reporting: Aggregates by unique timestamp first (any passing alternative marks that timestamp as successful) and publishes legacy ResultCode values for compatibility.
 
 - Result labels surfaced to users/UI mirror the legacy meanings: `valid` (all timestamps succeed), `no RouteAlternative` (single-alternative links with mixed success), `no RouteAlternative and all invalid` (single-alternative links entirely failing), and `RouteAlternative greater than one` for any multi-alternative scenario.
 - When RouteAlternative values are present but timestamps remain unique, the aggregator falls back on the alternative IDs so links with indices >1 are still classified as multi-alternative for reporting.
@@ -124,47 +122,47 @@ The validation system now uses simplified context codes with individual test res
 | 94 | MISSING_OBSERVATION | Expected RequestedTime missing for links with data | missing_observations.csv |
 | 95 | NO_DATA_LINK | Link exists in shapefile but has zero observations in CSV | no_data_links.csv |
 
-**Important Notes:**
-- **Code 94**: Generated only for links that have some actual data but are missing specific RequestedTime intervals within the analysis period
-- **Code 95**: Generated only for links that exist in the reference shapefile but have no observations at all in the CSV data
-- **These codes never appear in validated_data.csv** - they are synthetic placeholders in separate output files
-- **Code 94** uses the RequestedTime field (not timestamp) to indicate when observations were expected, and the pipeline mirrors between `RequestedTime`/`requested_time` so snake_case inputs still work.
-- **Code 95** has NULL RequestedTime values since the entire link lacks data
-- **Conditional Generation**: Code 94 (missing observations) are only generated when "Data Completeness Analysis (Optional)" checkbox is enabled in GUI
+**Notes:**
+- Code 94: Links with some data but missing specific RequestedTime intervals
+- Code 95: Links in shapefile but no observations in CSV data
+- These codes appear in separate output files, not in validated_data.csv
+- Code 94 uses RequestedTime field to indicate when observations were expected
+- Code 95 has NULL RequestedTime values since the entire link lacks data
+- Code 94 only generated when "Data Completeness Analysis" checkbox is enabled
 
 ### Individual Test Result Fields
 
 Instead of encoding test configuration in codes, each test has dedicated result fields:
 
-**Always Present:**
+Always Present:
 - `is_valid`: True if ALL enabled tests pass, False otherwise
 - `valid_code`: Context code (1, 2, or 3)
 - `hausdorff_distance`: Actual distance in meters (e.g., 6.94)
 - `hausdorff_pass`: True/False for Hausdorff test
 
-**Present Only If Length Test Enabled:**
+Present Only If Length Test Enabled:
 - `length_ratio`: Actual length ratio (e.g., 0.999)
 - `length_pass`: True/False for length test
 
-**Present Only If Coverage Test Enabled:**
+Present Only If Coverage Test Enabled:
 - `coverage_percent`: Actual coverage percentage (e.g., 97.3)
 - `coverage_pass`: True/False for coverage test
 
 ### Example Results
 
-**Hausdorff Only Configuration:**
+Hausdorff Only Configuration:
 ```
 is_valid=False, valid_code=2, hausdorff_distance=6.94, hausdorff_pass=False
 ```
 
-**All Tests Enabled Configuration:**
+All Tests Enabled Configuration:
 ```
 is_valid=False, valid_code=2,
 hausdorff_distance=6.94, hausdorff_pass=False,
 length_ratio=0.999, length_pass=True,
 coverage_percent=97.3, coverage_pass=True
 ```
-*(is_valid=False because Hausdorff failed despite length and coverage passing)*
+(is_valid=False because Hausdorff failed despite length and coverage passing)
 
 ### Data Availability Codes (90-93)
 *Error codes for validation data issues only*
@@ -211,26 +209,18 @@ coverage_percent=97.3, coverage_pass=True
 
 ## Link-Level Transparent Metrics
 
-### **CRITICAL IMPROVEMENT: From Confusing Codes to Clear Metrics**
+Route alternatives are alternatives for the same routing request, not independent observations.
 
-**Previous Problem:** Arbitrary result codes (95, 85, 75, etc.) hid critical information about data coverage and actual performance.
+Algorithm:
+1. Timestamp-Level Evaluation: For each (link_id, timestamp), check if ANY alternative is valid
+   - If ANY alternative passes validation → Timestamp is SUCCESSFUL
+   - If ALL alternatives fail validation → Timestamp is FAILED
 
-**New Solution:** Raw percentages and complete transparency - no hidden information.
-
-### **Timestamp-Based Aggregation Logic**
-
-**Key Insight:** Route alternatives are **alternatives** for the same routing request, not independent observations.
-
-**Algorithm:**
-1. **Timestamp-Level Evaluation:** For each `(link_id, timestamp)`, check if **ANY** alternative is valid
-   - If ANY alternative passes validation → Timestamp is **SUCCESSFUL**
-   - If ALL alternatives fail validation → Timestamp is **FAILED**
-
-2. **Link-Level Metrics:** Calculate transparent statistics
+2. Link-Level Metrics: Calculate transparent statistics
    - `success_rate = (successful_timestamps / total_timestamps) × 100`
    - `failed_timestamps = total_timestamps - successful_timestamps`
 
-**Example:**
+Example:
 ```
 Link s_653-655 at 17:00:
 - Alternative 1: INVALID (Hausdorff 514m > 5m threshold)
@@ -240,9 +230,7 @@ Link s_653-655 at 17:00:
 RESULT: Timestamp SUCCESSFUL (≥1 valid alternative provided good route)
 ```
 
-### **Transparent Metrics Fields**
-
-The system provides complete transparency through these fields:
+### Transparent Metrics Fields
 
 | Field | Description | Example |
 |-------|-------------|---------|
@@ -255,69 +243,54 @@ The system provides complete transparency through these fields:
 | `single_alt_timestamps` | Time periods with one alternative | 200 |
 | `multi_alt_timestamps` | Time periods with multiple alternatives | 88 |
 
-### **Advantages of Transparent Metrics**
-
-✅ **No Hidden Information:** See exactly what happened
-✅ **Coverage Visibility:** `total_timestamps` reveals data availability
-✅ **No Arbitrary Bins:** Raw percentages instead of meaningless codes
-✅ **User Control:** Apply your own thresholds and interpretations
-✅ **Complete Picture:** Distinguish between poor performance vs poor coverage
-
 ## Real-World Examples
 
-### **Row-Level Validation Examples**
+### Row-Level Validation Examples
 
-**Successful Single Alternative:**
+Successful Single Alternative:
 - Reference: A→B→C→D→E (5km highway segment)
 - Google Alt 1: A→B→C→D→E (same route, slight GPS noise)
-- Results: Hausdorff 3.2m < 5m ✓
+- Results: Hausdorff 3.2m < 5m PASS
 - Row Result: `is_valid=True`, `valid_code=2`, `hausdorff_distance=3.2`, `hausdorff_pass=True`
 
-**Failed Single Alternative:**
+Failed Single Alternative:
 - Reference: A→B→C→D→E (main highway)
 - Google Alt 1: A→F→G→H→E (alternative route via side roads)
-- Results: Hausdorff 45m > 5m ❌
+- Results: Hausdorff 45m > 5m FAIL
 - Row Result: `is_valid=False`, `valid_code=2`, `hausdorff_distance=45.0`, `hausdorff_pass=False`
 
-**Multi-Alternative Scenario with Individual Test Results:**
+Multi-Alternative Scenario:
 - Reference: Highway route between nodes 1321-1430
 - Google Alt 1: Primary highway (Hausdorff 0.0m, Length 0.985, Coverage 100%) → VALID
 - Google Alt 2: Alternative route (Hausdorff 514.7m, Length 1.203, Coverage 78%) → INVALID
 - Google Alt 3: Side roads route (Hausdorff 195.3m, Length 0.934, Coverage 65%) → INVALID
-- **Timestamp Result**: SUCCESSFUL (≥1 valid alternative available)
+- Timestamp Result: SUCCESSFUL (≥1 valid alternative available)
 
-### **Link-Level Transparent Metrics Examples**
+### Link-Level Examples
 
-**High-Performance Link with Excellent Coverage:**
+High-Performance Link:
 ```
 s_11430-1321: success_rate=99.3%, total_observations=288, successful_observations=286,
               failed_observations=2, total_routes=409, multi_route_observations=88
 ```
-- **Interpretation:** Excellent reliability (99.3%) with comprehensive coverage (288 routing requests)
-- **Insight:** Multiple route options frequently available (88 multi-route requests)
 
-**Perfect Performance Link with Limited Coverage:**
+Perfect Performance Link:
 ```
 s_9054-99: success_rate=100.0%, total_observations=54, successful_observations=54,
            failed_observations=0, total_routes=54, single_route_observations=54
 ```
-- **Interpretation:** Perfect success rate but only 54 observations
-- **Insight:** Always single route option, no coverage issues when data available
 
-**Failed Link with Good Coverage:**
+Failed Link:
 ```
 s_653-655: success_rate=0.0%, total_observations=245, successful_observations=0,
            failed_observations=245, total_routes=245, single_route_observations=245
 ```
-- **Interpretation:** Systematic failure despite good coverage (245 routing requests)
-- **Insight:** Consistent routing differences exceed threshold (Hausdorff 6.94m > 5.0m)
 
-**Link with No Data:**
+Link with No Data:
 ```
 s_999-888: success_rate=None, total_observations=0, successful_observations=0,
            failed_observations=0, total_routes=0
 ```
-- **Interpretation:** No routing requests available for this shapefile link
 
 ## Output Files
 
@@ -377,7 +350,7 @@ The validation system generates **6-11 output files** organized into three logic
 
 #### **8-12. Spatial Shapefiles** *(Only if shapefile generation enabled)*
 - **failed_observations_shapefile.zip**: Validation failures with **decoded polyline geometries** from Google observations
-- **failed_observations_reference_shapefile.zip**: Reference comparison with **original shapefile geometries** for failed timestamps (NEW)
+- **failed_observations_reference_shapefile.zip**: Time-period aggregated failure analysis with **original shapefile geometries**
 - **missing_observations_shapefile.zip**: Missing data with **original shapefile geometries** *(conditional on completeness analysis)*
 - **no_data_links_shapefile.zip**: No-data links with **original shapefile geometries**
 - **link_report.shp + components**: Individual shapefile files (also packaged in ZIP above)
@@ -386,8 +359,78 @@ The validation system generates **6-11 output files** organized into three logic
 
 **Geometry Sources by File Type:**
 - **Validation Failures (codes 1-3)**: Use decoded Google polylines to show actual routing differences
-- **Failed Observations Reference (NEW)**: Use original shapefile geometry to show expected routes for failed timestamps
+- **Failed Observations Reference**: Use original shapefile geometry with time-period aggregation for pattern analysis
 - **Missing/No-Data (codes 94-95)**: Use original shapefile geometry since no Google data exists
+
+## Failed Observations Reference Time-Period Aggregation
+
+### Overview
+
+The failed observations reference shapefile provides time-of-day failure pattern analysis with one row per unique link and aggregated failure counts across time periods.
+
+### Time Period Structure
+
+**5 Time Periods (Left-Inclusive, Right-Exclusive):**
+1. **Night**: 00:00-06:00 (excludes 06:00)
+2. **Morning**: 06:00-11:00 (excludes 11:00)
+3. **Midday**: 11:00-15:00 (excludes 15:00)
+4. **Afternoon**: 15:00-20:00 (excludes 20:00)
+5. **Evening**: 20:00-00:00 (includes both 20:00 and 00:00)
+
+### Averaging Logic
+
+**Formula**: `period_failure_count = total_failures_in_period / total_days_analyzed`
+
+**Example Calculation**:
+- Link s_653-655 analyzed across 3 days
+- Morning failures: Day1=2, Day2=1, Day3=3 = 6 total
+- Morning average: 6 failures ÷ 3 days = 2.0 failures per day
+- Output field: `06_11_f_cn = 2.0`
+
+### Output Field Structure
+
+**Core Fields (Always Present):**
+- `link_id`: Link identifier
+- `data_sourc`: Data source identifier
+- `valid_code`: Validation code from failed observations
+- `avg_hausdo`: Average Hausdorff distance across all failures
+- `best_hausd`: Best (minimum) Hausdorff distance
+- `worst_haus`: Worst (maximum) Hausdorff distance
+
+**Time Period Fields (Always Present):**
+- `00_06_f_cn`: Average failures per day in night period (00:00-06:00)
+- `06_11_f_cn`: Average failures per day in morning period (06:00-11:00)
+- `11_15_f_cn`: Average failures per day in midday period (11:00-15:00)
+- `15_20_f_cn`: Average failures per day in afternoon period (15:00-20:00)
+- `20_00_f_cn`: Average failures per day in evening period (20:00-00:00)
+
+**Conditional Fields (When Length Check Enabled):**
+- `avg_len_rt`: Average length ratio across all failures
+- `best_len`: Best length ratio
+- `worst_len`: Worst length ratio
+
+**Conditional Fields (When Coverage Check Enabled):**
+- `avg_cover`: Average coverage percentage across all failures
+- `best_cov`: Best coverage percentage
+- `worst_cov`: Worst coverage percentage
+
+**Metadata Fields:**
+- `total_days`: Number of unique days analyzed
+- `total_fail`: Total failed observations for this link
+
+### Analytical Benefits
+
+- Identify rush hour vs off-peak failure rates
+- Compare morning vs evening validation performance
+- Symbolize links by dominant failure period
+- 95%+ reduction in shapefile size
+
+### Field Naming Convention
+
+Field names are limited to 10 characters for DBF compatibility:
+- `f_cn` suffix indicates "failure count"
+- `00_06` format clearly shows time range
+- All names designed for immediate recognition in GIS attribute tables
 
 **Conditional Generation Rules:**
 - **missing_observations.csv**: Only when "Data Completeness Analysis (Optional)" checkbox is enabled
@@ -419,31 +462,23 @@ The validation system provides comprehensive geometric analysis with transparent
 
 The system handles diverse validation scenarios with reliable geometric analysis and comprehensive reporting capabilities.
 
-## Failed Observations Reference Shapefile (NEW)
+## Failed Observations Reference Shapefile
 
-### Visual Comparison Analysis Feature
+### Visual Comparison Analysis
 
-The system now generates a specialized reference comparison shapefile for failed observations to enable precise GIS overlay analysis.
+The system generates two complementary shapefiles for GIS overlay analysis:
+1. `failed_observations.shp` - Shows actual Google polyline geometries
+2. `failed_observations_reference.shp` - Shows reference shapefile geometries
 
-#### **Purpose and Design**
-- **Problem**: When validations fail, users need to see both what Google Maps returned AND what was expected
-- **Solution**: Two complementary shapefiles for perfect visual comparison:
-  1. `failed_observations.shp` - Shows actual Google polyline geometries (what was taken)
-  2. `failed_observations_reference.shp` - Shows reference shapefile geometries (what was expected)
+### Field Structure
 
-#### **Timestamp Aggregation Logic**
-- **Key Insight**: Failed observations represent timestamps where ALL route alternatives failed validation
-- **Aggregation**: Groups failed alternatives by (link_id, timestamp) and calculates summary metrics
-- **One Row Per Failed Timestamp**: Not per individual alternative, avoiding duplicate reference geometries
-
-#### **Field Structure**
 **Core Identifiers:**
 - `link_id`: Link identifier (e.g., "s_653-655")
 - `timestamp`: When the failure occurred
 - `num_alternatives`: How many alternatives were attempted
 
 **Aggregated Failure Metrics:**
-- `worst_hausdorff`, `best_hausdorff`, `avg_hausdorff`: Distance metrics across all failed alternatives
+- `worst_hausdorff`, `best_hausdorff`, `avg_hausdorff`: Distance metrics
 - `worst_length_ratio`, `best_length_ratio`, `avg_length_ratio`: Length metrics (when enabled)
 - `worst_coverage`, `best_coverage`, `avg_coverage`: Coverage metrics (when enabled)
 
@@ -451,39 +486,19 @@ The system now generates a specialized reference comparison shapefile for failed
 - `valid_code`: Validation context (2=single alternative, 3=multiple alternatives)
 - `data_source`: Always "reference_shapefile" for provenance
 
-#### **GIS Analysis Workflow**
-1. **Load Both Layers**: Import both failed_observations.shp and failed_observations_reference.shp
-2. **Visual Overlay**: Display with different symbology (e.g., red for actual, blue for expected)
-3. **Identify Patterns**: Spot systematic routing differences, problem areas, or infrastructure issues
-4. **Measure Deviations**: Use built-in GIS tools to measure distances between actual and expected routes
-5. **Spatial Analysis**: Analyze failure clusters, corridor issues, or regional patterns
-
-#### **Example Use Cases**
-- **Route Deviation Analysis**: See exactly where Google chose different paths than expected
-- **Infrastructure Impact**: Identify if construction or road changes affected routing
-- **Validation Threshold Tuning**: Visual confirmation of whether thresholds are appropriate
-- **Quality Assurance**: Verify that reference shapefile accurately represents intended routes
-
 ## Enhanced Data Completeness Analysis
 
-### Auto-Date Detection Feature
+### Auto-Date Detection
 
 The system automatically detects the analysis period from uploaded CSV files:
 
-#### Auto-Detection Process:
-1. **Column Detection**: Searches for timestamp columns (timestamp, datetime, date, time)
-2. **Format Parsing**: Handles multiple date formats using robust parsing
-3. **Range Calculation**: Extracts minimum and maximum dates from valid timestamps
-4. **UI Update**: Automatically populates analysis period with detected dates
+**Process:**
+1. Searches for timestamp columns (timestamp, datetime, date, time)
+2. Handles multiple date formats using robust parsing
+3. Extracts minimum and maximum dates from valid timestamps
+4. Automatically populates analysis period with detected dates
 
-#### User Experience:
-- **Automatic**: No manual date entry required when CSV contains valid timestamps
-- **Visual Feedback**: Shows detected period, duration, and record count
-- **Fallback**: Manual date input available if auto-detection fails
-- **Real-time**: Updates immediately when CSV is uploaded
-
-#### Benefits:
-- **Eliminates Errors**: No risk of manually entering wrong date ranges
-- **Saves Time**: Instant period detection from data
-- **Data-Driven**: Analysis period matches actual data coverage
-- **Comprehensive**: Ensures no actual data is excluded from analysis
+**Benefits:**
+- No manual date entry required
+- Eliminates errors from wrong date ranges
+- Analysis period matches actual data coverage
