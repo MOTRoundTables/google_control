@@ -535,6 +535,10 @@ def run_control_validation(csv_file, shapefile_file, output_dir,
     """Run the dataset control validation pipeline"""
 
     try:
+        # Track timing for automatic logging
+        from datetime import datetime
+        start_time = datetime.now()
+
         # Show progress
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -644,6 +648,10 @@ def run_control_validation(csv_file, shapefile_file, output_dir,
         progress_bar.progress(70)
         status_text.text("✅ Batch validation completed with proper route alternative handling")
 
+        # Track validation completion time
+        validation_end_time = datetime.now()
+        validation_time = (validation_end_time - start_time).total_seconds() / 60
+
         status_text.text("📊 Generating link reports...")
         progress_bar.progress(80)
 
@@ -663,6 +671,10 @@ def run_control_validation(csv_file, shapefile_file, output_dir,
         # Generate link report
         report_gdf = generate_link_report(result_df, shapefile_gdf, date_filter, completeness_params)
 
+        # Track report completion time
+        report_end_time = datetime.now()
+        report_time = (report_end_time - validation_end_time).total_seconds() / 60
+
         status_text.text("💾 Saving results...")
         progress_bar.progress(90)
 
@@ -671,6 +683,25 @@ def run_control_validation(csv_file, shapefile_file, output_dir,
 
         # Save results
         output_files = save_validation_results(result_df, report_gdf, output_dir, generate_shapefile, completeness_params)
+
+        # Create automatic performance and parameter log
+        params_for_log = {
+            'hausdorff_threshold_m': hausdorff_threshold,
+            'use_hausdorff': use_hausdorff,
+            'use_length_check': use_length_check,
+            'use_coverage_check': use_coverage_check,
+            'length_check_mode': length_check_mode,
+            'length_ratio_min': length_ratio_min,
+            'length_ratio_max': length_ratio_max,
+            'coverage_min': coverage_min,
+            'min_link_length_m': min_link_length,
+            'crs_metric': crs_metric,
+            'max_workers': max(1, min(8, os.cpu_count() or 1)) if len(csv_df) >= 5000 else 1,
+            'chunk_size': len(csv_df)
+        }
+
+        log_file = create_performance_log(output_dir, start_time, validation_time, report_time, params_for_log)
+        output_files['performance_log'] = log_file
 
         status_text.text("✅ Validation completed!")
         progress_bar.progress(100)
@@ -832,6 +863,58 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
             status_callback(f"✅ Saved {file_description} ({actual_size_mb:.1f}MB)")
 
         return str(destination)
+
+    def create_performance_log(output_dir, start_time, validation_time, report_time, params):
+        """Create performance and parameter log file"""
+        from datetime import datetime
+        import os
+
+        log_path = Path(output_dir) / "performance_and_parameters_log.txt"
+
+        # Calculate timings
+        current_time = datetime.now()
+        total_time = (current_time - start_time).total_seconds() / 60  # minutes
+
+        log_content = f"""CONTROL VALIDATION PERFORMANCE & PARAMETERS LOG
+========================================================
+Run Date: {start_time.strftime('%Y-%m-%d')}
+Start Time: {start_time.strftime('%H:%M:%S')}
+End Time: {current_time.strftime('%H:%M:%S')}
+System: {os.cpu_count()} CPU cores
+
+TIMING BREAKDOWN:
+================
+Validation Time: {validation_time:.1f} minutes
+Report Generation: {report_time:.1f} minutes
+Total Processing: {total_time:.1f} minutes
+
+VALIDATION PARAMETERS:
+=====================
+Hausdorff Threshold: {params.get('hausdorff_threshold_m', 'N/A')}m
+Use Hausdorff: {params.get('use_hausdorff', 'N/A')}
+Use Length Check: {params.get('use_length_check', 'N/A')}
+Use Coverage Check: {params.get('use_coverage_check', 'N/A')}
+Length Check Mode: {params.get('length_check_mode', 'N/A')}
+Length Ratio Range: {params.get('length_ratio_min', 'N/A')}-{params.get('length_ratio_max', 'N/A')}
+Coverage Minimum: {params.get('coverage_min', 'N/A')}
+Minimum Link Length: {params.get('min_link_length_m', 'N/A')}m
+Metric CRS: {params.get('crs_metric', 'N/A')}
+
+PROCESSING DETAILS:
+==================
+Parallel Processing: {'Yes' if params.get('max_workers', 1) > 1 else 'No'}
+Max Workers: {params.get('max_workers', 1)}
+Chunk Size: {params.get('chunk_size', 'N/A')}
+
+OUTPUT FILES:
+============
+Generated at: {output_dir}
+"""
+
+        with open(log_path, 'w', encoding='utf-8') as f:
+            f.write(log_content)
+
+        return str(log_path)
 
     # Count total files to be created
     file_operations = [
