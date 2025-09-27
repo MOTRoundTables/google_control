@@ -312,17 +312,31 @@ def _get_column_mapping(df: pd.DataFrame) -> dict:
     return column_map
 
 
-def _map_row_columns(row: pd.Series, col_map: dict) -> pd.Series:
-    """
-    Map row columns from actual names to expected names for validation.
-    """
-    mapped_data = {}
-    for expected, actual in col_map.items():
-        if actual is not None and actual in row.index:
-            mapped_data[expected] = row[actual]
-        else:
-            mapped_data[expected] = None
-    return pd.Series(mapped_data)
+def _map_row_columns(row, col_map: dict) -> dict:
+    """Map row columns from actual names to expected names for validation."""
+    if isinstance(row, pd.Series):
+        accessor = row
+        return {expected: accessor.get(actual) if actual is not None else None for expected, actual in col_map.items()}
+
+    if isinstance(row, dict):
+        accessor = row
+        return {expected: accessor.get(actual) if actual is not None else None for expected, actual in col_map.items()}
+
+    def _pull(value_key: str):
+        if value_key is None:
+            return None
+        if hasattr(row, value_key):
+            return getattr(row, value_key)
+        try:
+            return row[value_key]  # type: ignore[index]
+        except (KeyError, TypeError, AttributeError):
+            pass
+        if hasattr(row, "_asdict"):
+            cached = row._asdict()
+            return cached.get(value_key)
+        return None
+
+    return {expected: _pull(actual) for expected, actual in col_map.items()}
 
 
 def validate_dataframe_batch(
@@ -358,100 +372,71 @@ def validate_dataframe_batch(
     if missing_cols or col_map['route_alternative'] is None:
         # Geometry-only validation when route_alternative is missing
         results = []
-        for idx, row in df.iterrows():
-            # Create mapped row for validation
+        for row in df.itertuples(index=True, name='Row'):
             mapped_row = _map_row_columns(row, col_map)
             core_result = _validate_single_row_core(mapped_row, shapefile_gdf, params,
                                                     require_route_alternative=False,
                                                     shapefile_lookup=shapefile_lookup)
 
-            # Set context to geometry-only
-            if core_result['valid_code'] not in [90, 91, 92, 93]:  # Not a data error
+            if core_result['valid_code'] not in [90, 91, 92, 93]:
                 core_result['valid_code'] = ValidCode.NO_ROUTE_ALTERNATIVE
             results.append(core_result)
 
-        result_df = pd.DataFrame(results)
+        result_df = pd.DataFrame(results, index=df.index)
         return pd.concat([df, result_df], axis=1)
 
     # Separate rows with and without timestamps
     df_with_timestamps = df[df[col_map['timestamp']].notna()]
     df_without_timestamps = df[df[col_map['timestamp']].isna()]
 
-    results = []
+    result_records = {}
 
     # Handle rows without timestamps first (they get REQUIRED_FIELDS_MISSING)
-    for idx, row in df_without_timestamps.iterrows():
+    for idx in df_without_timestamps.index:
         result = {
-            'index': idx,
             'is_valid': False,
             'valid_code': ValidCode.REQUIRED_FIELDS_MISSING,
             'hausdorff_distance': None,
-            'hausdorff_pass': False
+            'hausdorff_pass': False,
         }
-        # Add length and coverage fields only if those tests are enabled
         if params.use_length_check:
             result['length_ratio'] = None
             result['length_pass'] = False
         if params.use_coverage_check:
             result['coverage_percent'] = None
             result['coverage_pass'] = False
-        results.append(result)
+        result_records[idx] = result
 
     # Group rows with timestamps by link and timestamp to detect single vs multi alternatives
     if len(df_with_timestamps) > 0:
-        grouped = df_with_timestamps.groupby([col_map['name'], col_map['timestamp']])
+        grouped = df_with_timestamps.groupby([col_map['name'], col_map['timestamp']], sort=False)
 
         for (link_name, timestamp), group in grouped:
-            # Determine context: single or multi alternative
             group_size = len(group)
-            is_single_alternative = (group_size == 1)
-            context = 'single_alt' if is_single_alternative else 'multi_alt'
+            is_single_alternative = group_size == 1
 
-            # Process each row in the group individually
-            for idx, row in group.iterrows():
-                # Create mapped row for validation
+            for row in group.itertuples(index=True, name='Row'):
                 mapped_row = _map_row_columns(row, col_map)
-                # Get core validation result
-                core_result = _validate_single_row_core(mapped_row, shapefile_gdf, params,
-                                                        shapefile_lookup=shapefile_lookup)
+                core_result = _validate_single_row_core(
+                    mapped_row,
+                    shapefile_gdf,
+                    params,
+                    shapefile_lookup=shapefile_lookup,
+                )
 
-                # Set context based on group size
-                if core_result['valid_code'] not in [90, 91, 92, 93]:  # Not a data error
-                    if is_single_alternative:
-                        core_result['valid_code'] = ValidCode.SINGLE_ROUTE_ALTERNATIVE
-                    else:
-                        core_result['valid_code'] = ValidCode.MULTI_ROUTE_ALTERNATIVE
+                if core_result['valid_code'] not in [90, 91, 92, 93]:
+                    core_result['valid_code'] = (
+                        ValidCode.SINGLE_ROUTE_ALTERNATIVE if is_single_alternative else ValidCode.MULTI_ROUTE_ALTERNATIVE
+                    )
 
-                # Add index for sorting
-                core_result['index'] = idx
-                results.append(core_result)
+                result_records[row.Index] = core_result
 
-    # Sort results by original DataFrame index
-    results_sorted = sorted(results, key=lambda x: x['index'])
-
-    # Create result DataFrame with individual test results
-    result_data = []
-    for r in results_sorted:
-        row_result = {
-            'is_valid': r['is_valid'],
-            'valid_code': r['valid_code']
-        }
-        # Add individual test results (only include fields that were actually tested)
-        if 'hausdorff_distance' in r:
-            row_result['hausdorff_distance'] = r['hausdorff_distance']
-            row_result['hausdorff_pass'] = r['hausdorff_pass']
-        if 'length_ratio' in r:
-            row_result['length_ratio'] = r['length_ratio']
-            row_result['length_pass'] = r['length_pass']
-        if 'coverage_percent' in r:
-            row_result['coverage_percent'] = r['coverage_percent']
-            row_result['coverage_pass'] = r['coverage_pass']
-        result_data.append(row_result)
-
-    result_df = pd.DataFrame(result_data)
+    # Build result dataframe aligned to the original index order
+    result_df = pd.DataFrame.from_dict(result_records, orient='index')
+    result_df = result_df.reindex(df.index)
 
     # Combine with original data
-    combined_df = pd.concat([df.reset_index(drop=True), result_df], axis=1)
+    combined_df = pd.concat([df.reset_index(drop=True), result_df.reset_index(drop=True)], axis=1)
 
     # Sort final output by Name, Timestamp, RouteAlternative for consistent ordering
     col_map = _get_column_mapping(df)

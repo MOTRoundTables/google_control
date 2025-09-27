@@ -11,11 +11,33 @@ import tempfile
 import os
 import shutil
 import zipfile
+import gc
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import suppress
 
 # Import validation modules from the same component
 from .validator import validate_dataframe_batch, ValidationParameters
-from .report import generate_link_report, write_shapefile_with_results, create_failed_observations_reference_shapefile
+from .report import (
+    generate_link_report,
+    write_shapefile_with_results,
+    create_failed_observations_reference_shapefile,
+    extract_failed_observations,
+    extract_best_valid_observations,
+    extract_missing_observations,
+    extract_no_data_links,
+    create_failed_observations_shapefile,
+    create_csv_matching_shapefile,
+    _parse_timestamp_series,
+    calculate_expected_observations,
+)
 from components.processing.pipeline import resolve_hebrew_encoding
+
+try:
+    import chardet  # type: ignore[import]
+    HAS_CHARDET = True
+except ImportError:  # pragma: no cover - optional dependency
+    HAS_CHARDET = False
+    chardet = None  # type: ignore[assignment]
 
 
 def control_page():
@@ -399,7 +421,6 @@ def control_page():
                     st.error("❌ Start date must be before or equal to end date")
                 else:
                     # Calculate and show expected observations (use same logic as report)
-                    from components.control.report import calculate_expected_observations
                     expected_observations = calculate_expected_observations(
                         start_date_comp, end_date_comp, interval_minutes
                     )
@@ -678,112 +699,116 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
     else:
         result_df_sorted = result_df
 
-    result_df_sorted.to_csv(validated_csv_path, index=False, encoding='utf-8-sig')
-    output_files['validated_csv'] = str(validated_csv_path)
-    _maybe_add_zip_download(validated_csv_path, 'validated_csv', output_files)
+    cpu_count = os.cpu_count() or 1
+    max_workers = min(8, max(2, cpu_count))
 
-    from .report import extract_failed_observations, extract_best_valid_observations, extract_missing_observations, extract_no_data_links, create_failed_observations_shapefile, create_csv_matching_shapefile, generate_link_report
+    def _write_csv(dataframe, destination, columns=None):
+        destination = Path(destination)
+        dataframe.to_csv(destination, index=False, encoding='utf-8-sig', columns=columns)
+        return str(destination)
 
-    # Extract best valid observations
-    best_valid_df = extract_best_valid_observations(result_df_sorted)
-    best_csv_path = Path(output_dir) / "best_valid_observations.csv"
-    best_valid_df.to_csv(best_csv_path, index=False, encoding='utf-8-sig')
-    output_files['best_valid_observations_csv'] = str(best_csv_path)
-    _maybe_add_zip_download(best_csv_path, 'best_valid_observations_csv', output_files)
+    future_to_job = {}
 
-    # =============================================================================
-    # SEPARATE FILE GENERATION - Clean separation of different failure types
-    # =============================================================================
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        def submit_csv(key, dataframe, destination, columns=None):
+            future = executor.submit(_write_csv, dataframe, destination, columns)
+            future_to_job[future] = key
 
-    # 1. FAILED OBSERVATIONS - Only validation failures (codes 1-3)
-    validation_failed_df = extract_failed_observations(result_df_sorted)
-    if not validation_failed_df.empty:
-        # Filter to only codes 1-3 (validation failures)
-        validation_failed_df = validation_failed_df[
-            validation_failed_df.get('valid_code', 0).between(1, 3)
-        ].copy()
+        submit_csv('validated_csv', result_df_sorted, validated_csv_path)
 
-    failed_csv_path = Path(output_dir) / "failed_observations.csv"
-    validation_failed_df.to_csv(failed_csv_path, index=False, encoding='utf-8-sig')
-    output_files['failed_observations_csv'] = str(failed_csv_path)
-    _maybe_add_zip_download(failed_csv_path, 'failed_observations_csv', output_files)
+        # Extract best valid observations
+        best_valid_df = extract_best_valid_observations(result_df_sorted)
+        best_csv_path = Path(output_dir) / "best_valid_observations.csv"
+        submit_csv('best_valid_observations_csv', best_valid_df, best_csv_path)
 
-    # 2. MISSING OBSERVATIONS - Only if completeness analysis is enabled (code 94)
-    missing_observations_df = pd.DataFrame()  # Initialize as empty
-    if completeness_params:
-        missing_observations_df = extract_missing_observations(result_df_sorted, completeness_params, report_gdf)
-        missing_csv_path = Path(output_dir) / "missing_observations.csv"
-        missing_observations_df.to_csv(missing_csv_path, index=False, encoding='utf-8-sig')
-        output_files['missing_observations_csv'] = str(missing_csv_path)
-        _maybe_add_zip_download(missing_csv_path, 'missing_observations_csv', output_files)
+        # FAILED OBSERVATIONS
+        validation_failed_df = extract_failed_observations(result_df_sorted)
+        if not validation_failed_df.empty:
+            validation_failed_df = validation_failed_df[
+                validation_failed_df.get('valid_code', 0).between(1, 3)
+            ].copy()
+            failed_csv_path = Path(output_dir) / "failed_observations.csv"
+            submit_csv('failed_observations_csv', validation_failed_df, failed_csv_path)
+        else:
+            failed_csv_path = None
 
-    # 3. NO-DATA LINKS - Links in shapefile but not in CSV (code 95)
-    no_data_links_df = extract_no_data_links(result_df_sorted, report_gdf)
-    no_data_csv_path = Path(output_dir) / "no_data_links.csv"
-    no_data_links_df.to_csv(no_data_csv_path, index=False, encoding='utf-8-sig')
-    output_files['no_data_links_csv'] = str(no_data_csv_path)
-    _maybe_add_zip_download(no_data_csv_path, 'no_data_links_csv', output_files)
+        # MISSING OBSERVATIONS
+        missing_observations_df = pd.DataFrame()
+        if completeness_params:
+            missing_observations_df = extract_missing_observations(result_df_sorted, completeness_params, report_gdf)
+            missing_csv_path = Path(output_dir) / "missing_observations.csv"
+            submit_csv('missing_observations_csv', missing_observations_df, missing_csv_path)
+        else:
+            missing_csv_path = None
 
-    # Generate link report with statistics
-    report_with_stats_gdf = generate_link_report(
-        validated_df=result_df_sorted,
-        shapefile_gdf=report_gdf,
-        completeness_params=completeness_params
-    )
+        # NO-DATA LINKS
+        no_data_links_df = extract_no_data_links(result_df_sorted, report_gdf)
+        no_data_csv_path = Path(output_dir) / "no_data_links.csv"
+        submit_csv('no_data_links_csv', no_data_links_df, no_data_csv_path)
 
-    report_csv_path = Path(output_dir) / "link_report.csv"
-    report_df = report_with_stats_gdf.drop(columns=['geometry']).copy()
+        # Generate link report with statistics
+        report_with_stats_gdf = report_gdf.copy()
 
-    drop_for_csv = {
-        'single_alt_timestamps',
-        'multi_alt_timestamps',
-        'result_code',
-        'result_label',
-        'num',
-        'total_timestamps',
-        'successful_timestamps',
-        'failed_timestamps',
-        'success_rate',
-    }
-    report_df = report_df.drop(columns=[col for col in drop_for_csv if col in report_df.columns])
+        report_csv_path = Path(output_dir) / "link_report.csv"
+        drop_for_csv = {
+            'geometry',
+            'single_alt_timestamps',
+            'multi_alt_timestamps',
+            'result_code',
+            'result_label',
+            'num',
+            'total_timestamps',
+            'successful_timestamps',
+            'failed_timestamps',
+            'success_rate',
+        }
 
-    metric_order = [
-        'perfect_match_percent',
-        'threshold_pass_percent',
-        'failed_percent',
-        'total_success_rate',
-        'total_observations',
-        'successful_observations',
-        'failed_observations',
-        'total_routes',
-        'single_route_observations',
-        'multi_route_observations',
-        'expected_observations',
-        'missing_observations',
-        'data_coverage_percent',
-    ]
-    metric_set = set(metric_order)
+        metric_order = [
+            'perfect_match_percent',
+            'threshold_pass_percent',
+            'failed_percent',
+            'total_success_rate',
+            'total_observations',
+            'successful_observations',
+            'failed_observations',
+            'total_routes',
+            'single_route_observations',
+            'multi_route_observations',
+            'expected_observations',
+            'missing_observations',
+            'data_coverage_percent',
+        ]
+        metric_set = set(metric_order)
 
-    # Build column order: keep identifiers first, followed by requested metrics, then any remaining attributes
-    base_cols = [col for col in report_df.columns if col not in metric_set]
-    ordered_cols = []
-    for ident in ('From', 'To'):
-        if ident in base_cols:
-            ordered_cols.append(ident)
-            base_cols.remove(ident)
-    ordered_cols.extend([col for col in metric_order if col in report_df.columns])
-    ordered_cols.extend([col for col in base_cols if col not in ordered_cols])
-    report_df = report_df[ordered_cols]
+        base_cols = [
+            col for col in report_with_stats_gdf.columns
+            if col not in metric_set and col not in drop_for_csv
+        ]
+        ordered_cols = []
+        for ident in ('From', 'To'):
+            if ident in base_cols:
+                ordered_cols.append(ident)
+                base_cols.remove(ident)
+        ordered_cols.extend([
+            col for col in metric_order
+            if col in report_with_stats_gdf.columns and col not in drop_for_csv
+        ])
+        ordered_cols.extend([col for col in base_cols if col not in ordered_cols])
 
-    report_df.to_csv(report_csv_path, index=False, encoding='utf-8-sig')
-    output_files['link_report_csv'] = str(report_csv_path)
-    _maybe_add_zip_download(report_csv_path, 'link_report_csv', output_files)
+        submit_csv('link_report_csv', report_with_stats_gdf, report_csv_path, columns=ordered_cols)
 
+        # Wait for CSV jobs and register outputs
+        for future in as_completed(tuple(future_to_job.keys())):
+            key = future_to_job.pop(future)
+            path_str = future.result()
+            path_obj = Path(path_str)
+            output_files[key] = path_str
+            _maybe_add_zip_download(path_obj, key, output_files)
+
+    # Generate shapefiles when requested
     if generate_shapefile:
         report_shp_path = Path(output_dir) / "link_report.shp"
-        # Create shapefile that matches CSV exactly (same columns and order)
         try:
-            # Use write_shapefile_with_results to handle proper field ordering and truncation
             write_shapefile_with_results(report_with_stats_gdf, str(report_shp_path))
             print(f"Created link report shapefile: {report_shp_path}")
         except Exception as e:
@@ -792,9 +817,6 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
         shapefile_zip_path = create_shapefile_zip_package(str(report_shp_path), output_dir)
         output_files['link_report_zip'] = str(shapefile_zip_path)
 
-        # Create separate shapefiles for each failure type
-
-        # 1. Failed observations shapefile (codes 1-3 with decoded polylines)
         if not validation_failed_df.empty:
             failed_shp_path = Path(output_dir) / "failed_observations.shp"
             try:
@@ -808,7 +830,6 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
             except Exception as e:
                 print(f"Warning: Failed to create failed observations shapefile: {e}")
 
-            # 1b. Failed observations reference shapefile (for GIS overlay comparison)
             failed_ref_shp_path = Path(output_dir) / "failed_observations_reference.shp"
             try:
                 create_failed_observations_reference_shapefile(
@@ -822,7 +843,6 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
             except Exception as e:
                 print(f"Warning: Failed to create failed observations reference shapefile: {e}")
 
-        # 2. Missing observations shapefile (code 94 with original shapefile geometry)
         if completeness_params and not missing_observations_df.empty:
             missing_shp_path = Path(output_dir) / "missing_observations.shp"
             try:
@@ -830,14 +850,13 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
                     missing_observations_df,
                     report_gdf,
                     str(missing_shp_path),
-                    geometry_source='shapefile'  # Use original shapefile geometry
+                    geometry_source='shapefile'
                 )
                 missing_shapefile_zip_path = create_shapefile_zip_package(str(missing_shp_path), output_dir)
                 output_files['missing_observations_zip'] = str(missing_shapefile_zip_path)
             except Exception as e:
                 print(f"Warning: Failed to create missing observations shapefile: {e}")
 
-        # 3. No-data links shapefile (code 95 with original shapefile geometry) - always create
         no_data_shp_path = Path(output_dir) / "no_data_links.shp"
         try:
             if not no_data_links_df.empty:
@@ -845,10 +864,9 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
                     no_data_links_df,
                     report_gdf,
                     str(no_data_shp_path),
-                    geometry_source='shapefile'  # Use original shapefile geometry
+                    geometry_source='shapefile'
                 )
             else:
-                # Create empty shapefile with proper structure
                 empty_gdf = gpd.GeoDataFrame(columns=['link_id', 'Name', 'is_valid', 'valid_code'], geometry=[])
                 empty_gdf.crs = report_gdf.crs
                 empty_gdf.to_file(str(no_data_shp_path))
@@ -857,7 +875,17 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
         except Exception as e:
             print(f"Warning: Failed to create no-data links shapefile: {e}")
 
+    # Release heavy intermediate DataFrames
+    del best_valid_df
+    del missing_observations_df
+    del no_data_links_df
+    del report_with_stats_gdf
+    if 'validation_failed_df' in locals():
+        del validation_failed_df
+    gc.collect()
+
     return output_files
+
 
 def detect_date_range_from_csv(csv_file):
     """
@@ -887,7 +915,6 @@ def detect_date_range_from_csv(csv_file):
         timestamp_col = timestamp_cols[0]
 
         # Parse timestamps
-        from .report import _parse_timestamp_series
         timestamps = _parse_timestamp_series(df_sample[timestamp_col])
 
         # Remove NaN timestamps
@@ -919,44 +946,30 @@ def load_csv_with_encoding(csv_file):
     raw_data = b''
 
     try:
-        # Try to use chardet if available
-        import chardet
         with open(temp_file_path, 'rb') as f:
             raw_data = f.read(10000)  # Read first 10KB
 
-        # Check for BOM first
         if raw_data.startswith(b'\xef\xbb\xbf'):
             detected_encoding = 'utf-8-sig'
             st.info("📝 Detected UTF-8 with BOM encoding")
         else:
-            detected = chardet.detect(raw_data)
-            candidate = detected.get('encoding') if detected else None
-            confidence = (detected.get('confidence') or 0.0) if detected else 0.0
+            detection = chardet.detect(raw_data) if HAS_CHARDET and raw_data else {}
+            candidate = detection.get('encoding') if detection else None
+            confidence = float(detection.get('confidence') or 0.0) if detection else 0.0
             resolved = resolve_hebrew_encoding(raw_data, candidate)
 
-            if candidate and resolved.lower() != candidate.lower():
+            if candidate and resolved and resolved.lower() != candidate.lower():
                 detected_encoding = resolved
                 st.info(f"📝 Detected {candidate} (confidence: {confidence:.2f}) but using {resolved} based on Hebrew text")
             elif candidate and confidence > 0.7:
                 detected_encoding = resolved
                 st.info(f"📝 Detected encoding: {detected_encoding} (confidence: {confidence:.2f})")
             else:
-                detected_encoding = resolve_hebrew_encoding(raw_data, None)
+                detected_encoding = resolved
                 st.info("📝 Using default encoding: cp1255 (Hebrew)")
-
-    except ImportError:
-        # Check for BOM manually if chardet not available
-        with open(temp_file_path, 'rb') as f:
-            first_bytes = f.read(3)
-        if first_bytes == b'\xef\xbb\xbf':
-            detected_encoding = 'utf-8-sig'
-            st.info("📝 Detected UTF-8 with BOM encoding")
-        else:
-            detected_encoding = resolve_hebrew_encoding(raw_data, None)
-            st.info("📝 Using default encoding: cp1255 (Hebrew)")
     except Exception:
-        detected_encoding = 'utf-8-sig'
-        st.info("📝 Encoding detection failed, using UTF-8-SIG fallback")
+        detected_encoding = resolve_hebrew_encoding(raw_data, None) if raw_data else 'utf-8-sig'
+        st.info("📝 Encoding detection fell back to heuristic defaults")
 
     # Get file size for chunking decision
     file_size = len(csv_file.getvalue())
@@ -1234,19 +1247,34 @@ def cleanup_temp_shapefile(file_path):
         pass
 
 
-def create_shapefile_zip_package(shp_path, output_dir):
-    """Create a ZIP file containing all shapefile components"""
+def _collect_shapefile_components(base_path: Path):
+    """Yield existing shapefile component paths for zipping."""
+    for ext in ['.shp', '.shx', '.dbf', '.prj', '.cpg', '.xml']:
+        component_path = base_path.with_suffix(ext)
+        if component_path.exists():
+            yield component_path
+
+
+def create_shapefile_zip_package(shp_path, output_dir, cleanup=True):
+    """Create a ZIP file containing all shapefile components."""
     base_path = Path(shp_path).with_suffix('')
     zip_path = Path(output_dir) / f"{base_path.stem}_shapefile.zip"
 
-    with zipfile.ZipFile(zip_path, 'w') as zip_file:
-        # Add all shapefile components
-        for ext in ['.shp', '.shx', '.dbf', '.prj', '.cpg', '.xml']:
-            component_path = base_path.with_suffix(ext)
-            if component_path.exists():
-                zip_file.write(component_path, component_path.name)
+    components = list(_collect_shapefile_components(base_path))
+
+    with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zip_file:
+        for component_path in components:
+            zip_file.write(component_path, component_path.name)
+            if cleanup:
+                with suppress(OSError):
+                    component_path.unlink()
+
+    if cleanup:
+        with suppress(OSError):
+            base_path.parent.rmdir()
 
     return str(zip_path)
+
 
 
 _DOWNLOAD_LABELS = {

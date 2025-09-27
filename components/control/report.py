@@ -38,6 +38,11 @@ class ResultCode(IntEnum):
 from datetime import date, datetime, timedelta
 import numpy as np
 
+try:
+    import pyogrio  # type: ignore[import]
+except ImportError:  # pragma: no cover - optional dependency
+    pyogrio = None  # type: ignore[assignment]
+
 def _parse_timestamp_series(series: pd.Series) -> pd.Series:
     """Coerce a timestamp-like series into timezone-naive datetimes with fallbacks."""
     if pd.api.types.is_datetime64_any_dtype(series):
@@ -480,18 +485,22 @@ def generate_link_report(
     report_gdf['result_label'] = ''
     report_gdf['num'] = 0.0
 
+    # Prepare per-link statistics once to avoid repeated DataFrame scans
+    empty_stats = aggregate_link_statistics(pd.DataFrame())
+    if 'link_id' in filtered_df.columns and not filtered_df.empty:
+        stats_by_link = {
+            link_id: aggregate_link_statistics(group)
+            for link_id, group in filtered_df.groupby('link_id', sort=False)
+        }
+    else:
+        stats_by_link = {}
+
     # Process each link in the shapefile
     for idx, shapefile_row in report_gdf.iterrows():
         link_join_key = shapefile_row['join_key']
 
-        # Find observations for this link
-        if 'link_id' in filtered_df.columns:
-            link_data = filtered_df[filtered_df['link_id'] == link_join_key]
-        else:
-            link_data = pd.DataFrame()  # No matching data
-
         # Aggregate statistics for this link
-        stats = aggregate_link_statistics(link_data)
+        stats = stats_by_link.get(link_join_key, empty_stats)
 
         # Assign transparent metrics directly from stats
         total_observations = stats.get('total_observations', 0)
@@ -582,6 +591,21 @@ def _rename_dbf_field(dbf_path: Path, current: str, new: str) -> None:
         pass
 
 
+def _write_shapefile(gdf: gpd.GeoDataFrame, output_path, driver: str = 'ESRI Shapefile') -> None:
+    '''Write GeoDataFrame to disk preferring pyogrio for performance when available.'''
+    output_path_str = str(output_path)
+
+    if pyogrio is not None:
+        try:
+            pyogrio.write_dataframe(gdf, output_path_str, driver=driver)
+            return
+        except Exception:
+            # Fall back to GeoPandas when pyogrio write fails
+            pass
+
+    gdf.to_file(output_path_str, driver=driver)
+
+
 def write_shapefile_with_results(gdf: gpd.GeoDataFrame, output_path: str) -> None:
     """Write complete shapefile package with added transparent metrics fields."""
     tmp_dir = None
@@ -641,7 +665,7 @@ def write_shapefile_with_results(gdf: gpd.GeoDataFrame, output_path: str) -> Non
         tmp_dir = Path(tempfile.mkdtemp(prefix='control_shp_', dir=output_path.parent))
         tmp_shp_path = tmp_dir / output_path.name
 
-        output_gdf.to_file(tmp_shp_path, driver='ESRI Shapefile')
+        _write_shapefile(output_gdf, tmp_shp_path, driver='ESRI Shapefile')
 
         required_files = ['.shp', '.shx', '.dbf']
         base_path = tmp_shp_path.with_suffix('')
@@ -1162,54 +1186,62 @@ def create_csv_matching_shapefile(
     import polyline
     from shapely.geometry import LineString
 
-    # Create shapefile lookup for fallback
-    shapefile_lookup = {}
-    for _, row in shapefile_gdf.iterrows():
-        link_id = f's_{row["From"]}-{row["To"]}'
-        shapefile_lookup[link_id] = row.geometry
 
-    # Process each row to create geometries
+    # Create shapefile lookup for fallback geometries
+    shapefile_lookup = {
+        f"s_{row.From}-{row.To}": row.geometry
+        for row in shapefile_gdf.itertuples()
+    }
+
+    name_candidates = ('Name', 'name', 'link_id', 'linkId', 'linkID')
+    name_col = next((col for col in name_candidates if col in csv_df.columns), None)
+
+    polyline_col = None
+    if geometry_source == 'polyline':
+        for candidate in ('polyline', 'Polyline'):
+            if candidate in csv_df.columns:
+                polyline_col = candidate
+                break
+
     geometries = []
-    shapefile_rows = []
+    index_order = []
+    decode_cache = {}
 
-    for idx, row in csv_df.iterrows():
+    for row in csv_df.itertuples(index=True, name='Row'):
         geometry = None
-        link_id = row.get('Name') or row.get('link_id')
+        link_id = getattr(row, name_col, None) if name_col else None
 
         try:
-            if geometry_source == 'polyline' and 'polyline' in row and pd.notna(row['polyline']):
-                # Use decoded polyline geometry (for failed observations)
-                try:
-                    decoded_coords = polyline.decode(str(row['polyline']))
-                    if len(decoded_coords) >= 2:
-                        # Convert lat,lon to lon,lat for shapely
-                        coords_lonlat = [(lon, lat) for lat, lon in decoded_coords]
+            if geometry_source == 'polyline' and polyline_col:
+                encoded = getattr(row, polyline_col, None)
+                if encoded is not None and not pd.isna(encoded):
+                    key = str(encoded)
+                    decoded_coords = decode_cache.get(key)
+                    if decoded_coords is None:
+                        try:
+                            decoded_coords = polyline.decode(key)
+                        except Exception as exc:
+                            decoded_coords = None
+                            print(f"Warning: Failed to decode polyline for row {row.Index}: {exc}")
+                        decode_cache[key] = decoded_coords
+
+                    if decoded_coords and len(decoded_coords) >= 2:
+                        coords_lonlat = ((lon, lat) for lat, lon in decoded_coords)
                         geometry = LineString(coords_lonlat)
-                    else:
-                        print(f"Warning: Insufficient coordinates in polyline for row {idx}")
-                        # Fallback to shapefile geometry
-                        if link_id in shapefile_lookup:
-                            geometry = shapefile_lookup[link_id]
-                except Exception as e:
-                    print(f"Warning: Failed to decode polyline for row {idx}: {e}")
-                    # Fallback to shapefile geometry
-                    if link_id in shapefile_lookup:
-                        geometry = shapefile_lookup[link_id]
-            else:
-                # Use original shapefile geometry (for missing/no-data observations)
-                if link_id in shapefile_lookup:
-                    geometry = shapefile_lookup[link_id]
-                else:
-                    print(f"Warning: Link {link_id} not found in shapefile for row {idx}")
+                    elif decoded_coords:
+                        print(f"Warning: Insufficient coordinates in polyline for row {row.Index}")
+
+            if geometry is None and link_id in shapefile_lookup:
+                geometry = shapefile_lookup[link_id]
 
             if geometry is not None:
                 geometries.append(geometry)
-                shapefile_rows.append(row)
+                index_order.append(row.Index)
             else:
-                print(f"Warning: No geometry found for row {idx}, link {link_id}")
+                print(f"Warning: No geometry found for row {row.Index}, link {link_id}")
 
-        except Exception as e:
-            print(f"Warning: Error processing row {idx}: {e}")
+        except Exception as exc:
+            print(f"Warning: Error processing row {row.Index}: {exc}")
             continue
 
     if not geometries:
@@ -1217,7 +1249,7 @@ def create_csv_matching_shapefile(
         return
 
     # Create GeoDataFrame with exact same columns as CSV
-    result_gdf = gpd.GeoDataFrame(shapefile_rows, geometry=geometries)
+    result_gdf = gpd.GeoDataFrame(csv_df.loc[index_order].copy(), geometry=geometries)
 
     # Set CRS (WGS84 for polylines, original CRS for shapefile geometry)
     result_gdf.crs = 'EPSG:4326'  # WGS84 for consistency
@@ -1231,7 +1263,7 @@ def create_csv_matching_shapefile(
 
     # Save shapefile
     try:
-        result_gdf.to_file(output_path, driver='ESRI Shapefile')
+        _write_shapefile(result_gdf, output_path, driver='ESRI Shapefile')
         print(f"Created shapefile matching CSV: {output_path}")
     except Exception as e:
         print(f"Error creating shapefile: {e}")
@@ -1260,17 +1292,17 @@ def create_failed_observations_reference_shapefile(
     output_path: str
 ) -> None:
     """
-    Create a reference comparison shapefile for failed observations.
+    Create a reference shapefile for failed observations with time period aggregation.
 
-    This shapefile aggregates failed timestamps (where ALL alternatives failed) and shows
-    the reference geometry that was expected. One row per failed timestamp, not per alternative.
+    This shapefile aggregates failed observations by link and time periods (not individual timestamps).
+    Shows reference geometry with failure patterns across 5 time periods per day.
 
-    Logic:
-    - Group failed observations by (link_id, timestamp)
-    - For each failed timestamp, calculate aggregated metrics across all alternatives
-    - Use reference shapefile geometry (what was expected)
-
-    Perfect for GIS overlay with failed_observations.shp to see why routes failed.
+    Time periods (left-inclusive, right-exclusive):
+    - 00:00-06:00 (night)
+    - 06:00-11:00 (morning)
+    - 11:00-15:00 (midday)
+    - 15:00-20:00 (afternoon)
+    - 20:00-00:00 (evening)
 
     Args:
         failed_observations_df: DataFrame with individual failed validation results
@@ -1287,61 +1319,101 @@ def create_failed_observations_reference_shapefile(
         link_id = f's_{row["From"]}-{row["To"]}'
         shapefile_lookup[link_id] = row
 
-    # Standardize column names
+    # Standardize column names and convert timestamp
     df = failed_observations_df.copy()
     if 'Name' in df.columns and 'link_id' not in df.columns:
         df['link_id'] = df['Name']
     if 'Timestamp' in df.columns and 'timestamp' not in df.columns:
         df['timestamp'] = df['Timestamp']
 
-    # Group by (link_id, timestamp) to aggregate failed alternatives
+    # Parse timestamps to extract hour and date
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df['hour'] = df['timestamp'].dt.hour
+    df['date'] = df['timestamp'].dt.date
+
+    # Define time period mapping function
+    def get_time_period(hour):
+        if 0 <= hour < 6:
+            return 'period_00_06'
+        elif 6 <= hour < 11:
+            return 'period_06_11'
+        elif 11 <= hour < 15:
+            return 'period_11_15'
+        elif 15 <= hour < 20:
+            return 'period_15_20'
+        else:  # 20 <= hour <= 23
+            return 'period_20_00'
+
+    df['time_period'] = df['hour'].apply(get_time_period)
+
+    # Group by link_id to create one row per link
     reference_rows = []
     geometries = []
 
-    for (link_id, timestamp), group in df.groupby(['link_id', 'timestamp']):
+    for link_id, link_group in df.groupby('link_id'):
         if link_id in shapefile_lookup:
             shapefile_row = shapefile_lookup[link_id]
 
-            # Calculate aggregated metrics across all failed alternatives
-            num_alternatives = len(group)
-
-            # Hausdorff metrics (always present)
-            hausdorff_distances = group['hausdorff_distance'].dropna()
-            worst_hausdorff = hausdorff_distances.max() if not hausdorff_distances.empty else None
-            best_hausdorff = hausdorff_distances.min() if not hausdorff_distances.empty else None
-            avg_hausdorff = hausdorff_distances.mean() if not hausdorff_distances.empty else None
+            # Calculate overall metrics across all failed observations
+            hausdorff_distances = link_group['hausdorff_distance'].dropna()
 
             reference_row = {
                 # Core identifiers
                 'link_id': link_id,
-                'timestamp': timestamp,
-                'num_alternatives': num_alternatives,
+                'data_sourc': 'reference_shapefile',
+                'valid_code': link_group['valid_code'].iloc[0],
 
-                # Hausdorff metrics
-                'worst_hausdorff': worst_hausdorff,
-                'best_hausdorff': best_hausdorff,
-                'avg_hausdorff': avg_hausdorff,
+                # Hausdorff metrics (always present)
+                'avg_hausdo': hausdorff_distances.mean() if not hausdorff_distances.empty else None,
+                'best_hausd': hausdorff_distances.min() if not hausdorff_distances.empty else None,
+                'worst_haus': hausdorff_distances.max() if not hausdorff_distances.empty else None,
 
-                # Context
-                'valid_code': group['valid_code'].iloc[0],  # Should be same for all alternatives
-                'data_source': 'reference_shapefile'
+                # Initialize time period failure counts (≤10 chars for DBF)
+                '00_06_f_cn': 0,
+                '06_11_f_cn': 0,
+                '11_15_f_cn': 0,
+                '15_20_f_cn': 0,
+                '20_00_f_cn': 0,
+
+                # Metadata
+                'total_days': len(link_group['date'].unique()),
+                'total_fail': len(link_group)
             }
 
-            # Length metrics (conditional on presence)
-            if 'length_ratio' in group.columns:
-                length_ratios = group['length_ratio'].dropna()
-                if not length_ratios.empty:
-                    reference_row['worst_length_ratio'] = length_ratios.max()
-                    reference_row['best_length_ratio'] = length_ratios.min()
-                    reference_row['avg_length_ratio'] = length_ratios.mean()
+            # Count failures by time period, averaged across ALL days (not just days with failures)
+            total_days = len(link_group['date'].unique())
+            period_totals = link_group.groupby('time_period').size()
 
-            # Coverage metrics (conditional on presence)
-            if 'coverage_percent' in group.columns:
-                coverage_percents = group['coverage_percent'].dropna()
+            # Map period totals to average per day across all days
+            period_mapping = {
+                'period_00_06': '00_06_f_cn',
+                'period_06_11': '06_11_f_cn',
+                'period_11_15': '11_15_f_cn',
+                'period_15_20': '15_20_f_cn',
+                'period_20_00': '20_00_f_cn'
+            }
+
+            for period, field in period_mapping.items():
+                if period in period_totals:
+                    # Average = total failures in this period / total days analyzed
+                    reference_row[field] = round(period_totals[period] / total_days, 2)
+                # Field already initialized to 0 if no failures in this period
+
+            # Add length metrics if present
+            if 'length_ratio' in link_group.columns:
+                length_ratios = link_group['length_ratio'].dropna()
+                if not length_ratios.empty:
+                    reference_row['avg_len_rt'] = length_ratios.mean()
+                    reference_row['best_len'] = length_ratios.min()
+                    reference_row['worst_len'] = length_ratios.max()
+
+            # Add coverage metrics if present
+            if 'coverage_percent' in link_group.columns:
+                coverage_percents = link_group['coverage_percent'].dropna()
                 if not coverage_percents.empty:
-                    reference_row['worst_coverage'] = coverage_percents.min()  # Lower coverage is worse
-                    reference_row['best_coverage'] = coverage_percents.max()
-                    reference_row['avg_coverage'] = coverage_percents.mean()
+                    reference_row['avg_cover'] = coverage_percents.mean()
+                    reference_row['best_cov'] = coverage_percents.max()
+                    reference_row['worst_cov'] = coverage_percents.min()  # Lower coverage is worse
 
             reference_rows.append(reference_row)
             geometries.append(shapefile_row['geometry'])
@@ -1360,10 +1432,11 @@ def create_failed_observations_reference_shapefile(
 
     # Save shapefile
     try:
-        result_gdf.to_file(output_path, driver='ESRI Shapefile')
+        _write_shapefile(result_gdf, output_path, driver='ESRI Shapefile')
         print(f"Created failed observations reference shapefile: {output_path}")
-        print(f"  - {len(result_gdf)} failed timestamps with reference geometry")
-        print(f"  - Aggregated metrics across {sum(row['num_alternatives'] for row in reference_rows)} total failed alternatives")
+        print(f"  - {len(result_gdf)} unique links with time-period aggregation")
+        print(f"  - Total failed observations: {sum(row['total_fail'] for row in reference_rows)}")
+        print(f"  - Time periods: 00-06, 06-11, 11-15, 15-20, 20-00 (average failures per day)")
         print(f"  - Use with failed_observations.shp for visual comparison")
     except Exception as e:
         print(f"Error creating failed observations reference shapefile: {e}")

@@ -1,0 +1,27 @@
+Tiny code edits with big impact
+
+Cache polyline decoding with lru_cache.
+
+Build the shapefile geometry lookup once and reuse.
+
+Simplify both lines with tolerance 0.5 m before distance.
+
+Fail fast using envelope distance as a cheap guard.
+
+Pick best alternative via groupby idxmin on hausdorff_distance.
+
+Cast Name to category before groupby and sort once at the end.
+
+Faster file writing
+
+Use pyogrio to write a single GeoPackage and only then create the one shapefile you actually need.
+
+Avoid repeated sorts. Sort once just before writing.
+
+On the server set GDAL_NUM_THREADS to ALL_CPUS and OMP_NUM_THREADS to the core count.
+
+Chunk the input and optionally parallelize
+
+Read the CSV in chunks of about 100k rows and process chunk by chunk.
+
+If the machine has multiple cores, use ProcessPoolExecutor on chunks.

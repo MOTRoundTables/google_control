@@ -46,6 +46,8 @@ python setup.py
 streamlit run app.py
 ```
 
+**Performance Tip**: Install optional dependency `pyogrio` (>=0.7) to speed up shapefile export. The control module auto-detects it and falls back to GeoPandas when it is missing.
+
 ### 2. Manual Installation
 
 ```bash
