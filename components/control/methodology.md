@@ -1,4 +1,3 @@
-# Dataset Control — Methodology
 
 This document explains **exactly** what the validator does, the **inputs** it expects, the **tests** it runs, and the **files** it writes. It's written for someone deploying the code on a server (not necessarily GIS‑savvy).
 
@@ -279,3 +278,47 @@ All shapefiles are written as **LineString** layers by default, with CRS set to 
 | no_data_links_shapefile.zip | **Reference** geometry | LineString | Reference CRS | One row per link that had zero observations |
 
 DBF note: field names are trimmed to ≤ 10 characters in the shapefile, but the **column order** matches the CSVs. Keep the CSVs as the authoritative schemas.
+
+### 12.1) Failed observations reference shapefile time-period aggregation
+
+The **failed_observations_reference_shapefile.zip** provides time-of-day failure pattern analysis with one row per unique link and aggregated failure counts across time periods.
+
+**Time period structure (left-inclusive, right-exclusive):**
+- **Night**: 00:00–06:00 (excludes 06:00)
+- **Morning**: 06:00–11:00 (excludes 11:00)
+- **Midday**: 11:00–15:00 (excludes 15:00)
+- **Afternoon**: 15:00–20:00 (excludes 20:00)
+- **Evening**: 20:00–00:00 (includes 20:00, excludes 00:00)
+
+**Averaging logic:**
+- Formula: `period_failure_count = total_failures_in_period ÷ total_days_analyzed`
+- Example: Link s_653-655 across 3 days with morning failures (Day1=2, Day2=1, Day3=3) → 6 total ÷ 3 days = 2.0 average → field `06_11_f_cn = 2.0`
+
+**Output fields (DBF 10-char limit):**
+
+| Field | Description |
+| --- | --- |
+| **link_id** | Link identifier |
+| **data_sourc** | Data source identifier (always "reference_shapefile") |
+| **valid_code** | Validation code from failed observations |
+| **avg_hausdo** | Average Hausdorff distance across all failures |
+| **best_hausd** | Best (minimum) Hausdorff distance |
+| **worst_haus** | Worst (maximum) Hausdorff distance |
+| **00_06_f_cn** | Average failures per day in night period |
+| **06_11_f_cn** | Average failures per day in morning period |
+| **11_15_f_cn** | Average failures per day in midday period |
+| **15_20_f_cn** | Average failures per day in afternoon period |
+| **20_00_f_cn** | Average failures per day in evening period |
+| **avg_len_rt** | Average length ratio (conditional: when length check enabled) |
+| **best_len** | Best length ratio (conditional: when length check enabled) |
+| **worst_len** | Worst length ratio (conditional: when length check enabled) |
+| **avg_cover** | Average coverage percentage (conditional: when coverage enabled) |
+| **best_cov** | Best coverage percentage (conditional: when coverage enabled) |
+| **worst_cov** | Worst coverage percentage (conditional: when coverage enabled) |
+| **total_days** | Number of unique days analyzed |
+| **total_fail** | Total failed observations for this link |
+
+**Field naming convention:**
+- `f_cn` suffix = "failure count"
+- `00_06` format clearly shows time range (hours in 24h format)
+- All names fit DBF 10-character limit
