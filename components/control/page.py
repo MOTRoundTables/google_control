@@ -864,18 +864,18 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
 
         return str(destination)
 
-    def create_performance_log(output_dir, start_time, validation_time, report_time, params):
-        """Create performance and parameter log file"""
-        from datetime import datetime
-        import os
+def create_performance_log(output_dir, start_time, validation_time, report_time, params):
+    """Create performance and parameter log file"""
+    from datetime import datetime
+    import os
 
-        log_path = Path(output_dir) / "performance_and_parameters_log.txt"
+    log_path = Path(output_dir) / "performance_and_parameters_log.txt"
 
-        # Calculate timings
-        current_time = datetime.now()
-        total_time = (current_time - start_time).total_seconds() / 60  # minutes
+    # Calculate timings
+    current_time = datetime.now()
+    total_time = (current_time - start_time).total_seconds() / 60  # minutes
 
-        log_content = f"""CONTROL VALIDATION PERFORMANCE & PARAMETERS LOG
+    log_content = f"""CONTROL VALIDATION PERFORMANCE & PARAMETERS LOG
 ========================================================
 Run Date: {start_time.strftime('%Y-%m-%d')}
 Start Time: {start_time.strftime('%H:%M:%S')}
@@ -911,10 +911,10 @@ OUTPUT FILES:
 Generated at: {output_dir}
 """
 
-        with open(log_path, 'w', encoding='utf-8') as f:
-            f.write(log_content)
+    with open(log_path, 'w', encoding='utf-8') as f:
+        f.write(log_content)
 
-        return str(log_path)
+    return str(log_path)
 
     # Count total files to be created
     file_operations = [
