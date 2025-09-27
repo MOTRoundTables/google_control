@@ -7,7 +7,10 @@ using geometric similarity metrics.
 
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Tuple, Optional, Dict, Any
+from typing import Tuple, Optional, Dict, Any, Callable
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import LineString, Point
@@ -62,20 +65,31 @@ class ValidCode(IntEnum):
 
 
 
-def _precompute_shapefile_lookup(shapefile_gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
+def _precompute_shapefile_lookup(shapefile_gdf: gpd.GeoDataFrame, target_crs: str = "EPSG:2039") -> Dict[str, Any]:
     """
-    Precompute shapefile join keys and create lookup dictionary.
+    Precompute shapefile join keys and create lookup dictionary with geometries in target CRS.
 
     Args:
         shapefile_gdf: Reference shapefile GeoDataFrame
+        target_crs: Target CRS for geometries (default: EPSG:2039)
 
     Returns:
-        Dictionary mapping join_key -> geometry
+        Dictionary mapping join_key -> (geometry_original, geometry_metric)
     """
+    # Ensure shapefile is in target CRS for metric calculations
+    if shapefile_gdf.crs is None:
+        shapefile_gdf = shapefile_gdf.set_crs("EPSG:4326")
+
+    shapefile_metric = shapefile_gdf.to_crs(target_crs)
+
     lookup = {}
     for idx, row in shapefile_gdf.iterrows():
         join_key = 's_' + str(row['From']) + '-' + str(row['To'])
-        lookup[join_key] = row['geometry']
+        # Store both original and metric geometries
+        lookup[join_key] = {
+            'original': row['geometry'],
+            'metric': shapefile_metric.loc[idx, 'geometry']
+        }
     return lookup
 
 
@@ -105,9 +119,10 @@ def parse_link_name(name: str) -> Tuple[Optional[str], Optional[str]]:
         return None, None
 
 
+@lru_cache(maxsize=10000)
 def decode_polyline(encoded: str, precision: int = 5) -> Optional[LineString]:
     """
-    Decode Google Maps encoded polyline.
+    Decode Google Maps encoded polyline with caching.
 
     Args:
         encoded: Encoded polyline string
@@ -150,14 +165,16 @@ def get_transformer(from_crs: str, to_crs: str) -> Transformer:
     return Transformer.from_crs(from_crs, to_crs, always_xy=True)
 
 
-def calculate_hausdorff(line1: LineString, line2: LineString, crs: str = "EPSG:2039") -> float:
+def calculate_hausdorff(line1: LineString, line2: LineString, crs: str = "EPSG:2039",
+                        line2_already_metric: bool = False) -> float:
     """
     Calculate Hausdorff distance between two lines in meters.
 
     Args:
-        line1: First geometry (assumed to be in EPSG:4326 if no CRS specified)
-        line2: Second geometry (assumed to be in EPSG:4326 if no CRS specified)
+        line1: First geometry (assumed to be in EPSG:4326)
+        line2: Second geometry (in EPSG:4326 or already in metric CRS if line2_already_metric=True)
         crs: Target metric CRS for calculation (default: EPSG:2039)
+        line2_already_metric: If True, line2 is already in the metric CRS
 
     Returns:
         Hausdorff distance in meters
@@ -176,18 +193,22 @@ def calculate_hausdorff(line1: LineString, line2: LineString, crs: str = "EPSG:2
         if line1.is_empty or line2.is_empty:
             return float('inf')  # Treat empty geometries as infinite distance
 
-        # Use cached transformer for CRS conversion
+        # Transform line1 (always in WGS84)
         transformer = get_transformer("EPSG:4326", crs)
-
-        # Transform geometries directly using shapely.ops.transform
         geom1_metric = transform(transformer.transform, line1)
-        geom2_metric = transform(transformer.transform, line2)
+
+        # Transform line2 only if needed
+        if line2_already_metric:
+            geom2_metric = line2
+        else:
+            geom2_metric = transform(transformer.transform, line2)
 
         # Check if reprojected geometries are valid
         if not geom1_metric.is_valid or not geom2_metric.is_valid:
             geom1_metric = geom1_metric.buffer(0) if not geom1_metric.is_valid else geom1_metric
             geom2_metric = geom2_metric.buffer(0) if not geom2_metric.is_valid else geom2_metric
 
+        # Always compute exact Hausdorff distance
         distance = geom1_metric.hausdorff_distance(geom2_metric)
 
         # Check for nan result
@@ -342,7 +363,8 @@ def _map_row_columns(row, col_map: dict) -> dict:
 def validate_dataframe_batch(
     df: pd.DataFrame,
     shapefile_gdf: gpd.GeoDataFrame,
-    params: ValidationParameters
+    params: ValidationParameters,
+    progress_callback: Optional[callable] = None
 ) -> pd.DataFrame:
     """
     Validate DataFrame with proper route alternative processing using new configuration codes.
@@ -361,8 +383,12 @@ def validate_dataframe_batch(
     # Get column mapping to handle different naming conventions
     col_map = _get_column_mapping(df)
 
+    # OPTIMIZATION: Convert name column to categorical for faster groupby
+    if col_map['name'] is not None and col_map['name'] in df.columns:
+        df[col_map['name']] = df[col_map['name']].astype('category')
+
     # OPTIMIZATION: Precompute shapefile join keys once
-    shapefile_lookup = _precompute_shapefile_lookup(shapefile_gdf)
+    shapefile_lookup = _precompute_shapefile_lookup(shapefile_gdf, params.crs_metric)
 
     # Check for required columns using column mapping
     required_cols = ['name', 'timestamp']
@@ -409,9 +435,19 @@ def validate_dataframe_batch(
 
     # Group rows with timestamps by link and timestamp to detect single vs multi alternatives
     if len(df_with_timestamps) > 0:
-        grouped = df_with_timestamps.groupby([col_map['name'], col_map['timestamp']], sort=False)
+        grouped = df_with_timestamps.groupby([col_map['name'], col_map['timestamp']], sort=False, observed=True)
+
+        total_groups = len(grouped)
+        group_count = 0
 
         for (link_name, timestamp), group in grouped:
+            group_count += 1
+
+            # Report progress every 100 groups or 5% of total groups
+            if progress_callback and (group_count % 100 == 0 or group_count % max(1, total_groups // 20) == 0):
+                progress_pct = int((group_count / total_groups) * 100)
+                progress_callback(f"Processing validation: {progress_pct}% ({group_count:,}/{total_groups:,} groups)")
+
             group_size = len(group)
             is_single_alternative = group_size == 1
 
@@ -440,6 +476,246 @@ def validate_dataframe_batch(
 
     # Sort final output by Name, Timestamp, RouteAlternative for consistent ordering
     col_map = _get_column_mapping(df)
+    sort_columns = []
+    if col_map['name']:
+        sort_columns.append(col_map['name'])
+    if col_map['timestamp']:
+        sort_columns.append(col_map['timestamp'])
+    if col_map['route_alternative']:
+        sort_columns.append(col_map['route_alternative'])
+
+    if sort_columns:
+        combined_df = combined_df.sort_values(sort_columns).reset_index(drop=True)
+
+    return combined_df
+
+
+def _validate_chunk_worker(chunk_data):
+    """
+    Worker function for parallel validation of a data chunk.
+
+    Args:
+        chunk_data: Dictionary containing:
+            - df_chunk: DataFrame chunk to validate
+            - shapefile_data: Serialized shapefile data
+            - params_dict: ValidationParameters as dict
+            - col_map: Column mapping
+
+    Returns:
+        List of result dictionaries with original indices
+    """
+    import geopandas as gpd
+    from shapely.geometry import Point, LineString
+
+    # Reconstruct objects from serialized data
+    df_chunk = chunk_data['df_chunk']
+    shapefile_gdf = gpd.GeoDataFrame.from_features(
+        chunk_data['shapefile_data']['features'],
+        crs=chunk_data['shapefile_data']['crs']
+    )
+
+    # Reconstruct ValidationParameters
+    params_dict = chunk_data['params_dict']
+    params = ValidationParameters(**params_dict)
+
+    col_map = chunk_data['col_map']
+
+    # Precompute shapefile lookup for this worker
+    shapefile_lookup = _precompute_shapefile_lookup(shapefile_gdf, params.crs_metric)
+
+    results = []
+
+    # Process each row in the chunk
+    for row in df_chunk.itertuples(index=True, name='Row'):
+        mapped_row = _map_row_columns(row, col_map)
+
+        # Check for missing timestamp
+        if col_map['timestamp'] is None or pd.isna(getattr(row, col_map['timestamp'], None)):
+            result = {
+                'original_index': row.Index,
+                'is_valid': False,
+                'valid_code': ValidCode.REQUIRED_FIELDS_MISSING,
+                'hausdorff_distance': None,
+                'hausdorff_pass': False,
+            }
+            if params.use_length_check:
+                result['length_ratio'] = None
+                result['length_pass'] = False
+            if params.use_coverage_check:
+                result['coverage_percent'] = None
+                result['coverage_pass'] = False
+            results.append(result)
+            continue
+
+        # Validate the row
+        core_result = _validate_single_row_core(
+            mapped_row,
+            shapefile_gdf,
+            params,
+            shapefile_lookup=shapefile_lookup,
+        )
+
+        # Add original index for later sorting
+        core_result['original_index'] = row.Index
+        results.append(core_result)
+
+    return results
+
+
+def validate_dataframe_batch_parallel(
+    df: pd.DataFrame,
+    shapefile_gdf: gpd.GeoDataFrame,
+    params: ValidationParameters,
+    max_workers: Optional[int] = None,
+    progress_callback: Optional[callable] = None
+) -> pd.DataFrame:
+    """
+    Validate DataFrame using parallel processing with proper route alternative handling.
+
+    Args:
+        df: DataFrame with observation rows
+        shapefile_gdf: Reference shapefile
+        params: Validation parameters
+        max_workers: Maximum number of worker processes (default: CPU count)
+        progress_callback: Optional callback for progress updates
+
+    Returns:
+        DataFrame with added validation columns (is_valid, valid_code)
+    """
+    if max_workers is None:
+        max_workers = min(8, max(2, os.cpu_count() or 1))
+
+    # For small datasets, use sequential processing
+    # Parallel overhead not worth it for small datasets
+    if len(df) < 5000:
+        return validate_dataframe_batch(df, shapefile_gdf, params, progress_callback)
+
+    # Get column mapping
+    col_map = _get_column_mapping(df)
+
+    # Convert name column to categorical for faster groupby
+    if col_map['name'] is not None and col_map['name'] in df.columns:
+        df[col_map['name']] = df[col_map['name']].astype('category')
+
+    # Prepare shapefile data for serialization
+    shapefile_data = {
+        'features': shapefile_gdf.__geo_interface__['features'],
+        'crs': str(shapefile_gdf.crs) if shapefile_gdf.crs else 'EPSG:4326'
+    }
+
+    # Convert ValidationParameters to dict for serialization
+    params_dict = {
+        'use_hausdorff': params.use_hausdorff,
+        'use_length_check': params.use_length_check,
+        'use_coverage_check': params.use_coverage_check,
+        'hausdorff_threshold_m': params.hausdorff_threshold_m,
+        'length_check_mode': params.length_check_mode,
+        'length_ratio_min': params.length_ratio_min,
+        'length_ratio_max': params.length_ratio_max,
+        'epsilon_length_m': params.epsilon_length_m,
+        'min_link_length_m': params.min_link_length_m,
+        'coverage_min': params.coverage_min,
+        'coverage_spacing_m': params.coverage_spacing_m,
+        'crs_metric': params.crs_metric,
+        'polyline_precision': params.polyline_precision
+    }
+
+    # Split DataFrame into chunks by link_id for better load balancing
+    if col_map['name'] is not None:
+        link_groups = list(df.groupby(col_map['name'], observed=True))
+
+        # Distribute link groups across workers for better load balancing
+        chunks = [[] for _ in range(max_workers)]
+        for i, (link_id, group) in enumerate(link_groups):
+            chunks[i % max_workers].extend([group])
+
+        # Combine groups into worker chunks
+        worker_chunks = []
+        for chunk_groups in chunks:
+            if chunk_groups:
+                worker_chunk = pd.concat(chunk_groups, ignore_index=False)
+                worker_chunks.append(worker_chunk)
+    else:
+        # Fallback: split by rows if no name column
+        chunk_size = max(100, len(df) // max_workers)
+        worker_chunks = [df[i:i + chunk_size] for i in range(0, len(df), chunk_size)]
+
+    # Prepare chunk data for workers
+    chunk_data_list = []
+    for chunk in worker_chunks:
+        if not chunk.empty:
+            chunk_data = {
+                'df_chunk': chunk,
+                'shapefile_data': shapefile_data,
+                'params_dict': params_dict,
+                'col_map': col_map
+            }
+            chunk_data_list.append(chunk_data)
+
+    # Process chunks in parallel
+    all_results = []
+    completed_chunks = 0
+    total_chunks = len(chunk_data_list)
+
+    if progress_callback:
+        progress_callback(f"Starting parallel validation with {max_workers} workers...")
+
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all chunks
+        future_to_chunk = {
+            executor.submit(_validate_chunk_worker, chunk_data): i
+            for i, chunk_data in enumerate(chunk_data_list)
+        }
+
+        # Collect results as they complete
+        for future in as_completed(future_to_chunk):
+            try:
+                chunk_results = future.result()
+                all_results.extend(chunk_results)
+
+                completed_chunks += 1
+                if progress_callback and completed_chunks % max(1, total_chunks // 10) == 0:
+                    progress_pct = int((completed_chunks / total_chunks) * 100)
+                    progress_callback(f"Parallel validation: {progress_pct}% ({completed_chunks}/{total_chunks} chunks)")
+
+            except Exception as e:
+                chunk_idx = future_to_chunk[future]
+                raise RuntimeError(f"Worker failed on chunk {chunk_idx}: {e}")
+
+    if progress_callback:
+        progress_callback("Combining parallel results...")
+
+    # Convert results to DataFrame and sort by original index
+    result_records = {result['original_index']: result for result in all_results}
+
+    # Handle context codes and grouping for route alternatives
+    df_with_timestamps = df[df[col_map['timestamp']].notna()] if col_map['timestamp'] else df
+
+    if len(df_with_timestamps) > 0 and col_map['name'] and col_map['timestamp']:
+        grouped = df_with_timestamps.groupby([col_map['name'], col_map['timestamp']], sort=False, observed=True)
+
+        for (link_name, timestamp), group in grouped:
+            group_size = len(group)
+            is_single_alternative = group_size == 1
+
+            # Update context codes for this group
+            for idx in group.index:
+                if idx in result_records and result_records[idx]['valid_code'] not in [90, 91, 92, 93]:
+                    result_records[idx]['valid_code'] = (
+                        ValidCode.SINGLE_ROUTE_ALTERNATIVE if is_single_alternative else ValidCode.MULTI_ROUTE_ALTERNATIVE
+                    )
+
+    # Build result DataFrame aligned to original index
+    for result in result_records.values():
+        result.pop('original_index', None)  # Remove helper field
+
+    result_df = pd.DataFrame.from_dict(result_records, orient='index')
+    result_df = result_df.reindex(df.index)
+
+    # Combine with original data
+    combined_df = pd.concat([df.reset_index(drop=True), result_df.reset_index(drop=True)], axis=1)
+
+    # Sort final output
     sort_columns = []
     if col_map['name']:
         sort_columns.append(col_map['name'])
@@ -506,12 +782,16 @@ def _validate_single_row_core(
 
         # Use precomputed lookup if available (much faster)
         if shapefile_lookup is None:
-            shapefile_lookup = _precompute_shapefile_lookup(shapefile_gdf)
+            shapefile_lookup = _precompute_shapefile_lookup(shapefile_gdf, params.crs_metric)
 
-        reference_geom = shapefile_lookup.get(join_key)
-        if reference_geom is None:
+        geom_data = shapefile_lookup.get(join_key)
+        if geom_data is None:
             result['valid_code'] = ValidCode.LINK_NOT_IN_SHAPEFILE
             return result
+
+        # Extract both original and metric geometries
+        reference_geom = geom_data['original'] if isinstance(geom_data, dict) else geom_data
+        reference_geom_metric = geom_data.get('metric', reference_geom) if isinstance(geom_data, dict) else reference_geom
 
         # Step 4: Decode polyline
         decoded_geom = decode_polyline(row['polyline'], params.polyline_precision)
@@ -530,7 +810,11 @@ def _validate_single_row_core(
 
         # TEST 1: Hausdorff Distance (always tested)
         try:
-            hausdorff_distance = calculate_hausdorff(decoded_geom, reference_geom, params.crs_metric)
+            # Use the pre-cached metric geometry for reference (already in metric CRS)
+            hausdorff_distance = calculate_hausdorff(
+                decoded_geom, reference_geom_metric, params.crs_metric,
+                line2_already_metric=True
+            )
             hausdorff_pass = (hausdorff_distance <= params.hausdorff_threshold_m)
 
             result['hausdorff_distance'] = hausdorff_distance
@@ -542,24 +826,20 @@ def _validate_single_row_core(
             raise ValueError(f"Hausdorff calculation failed for {join_key}: {exc}") from exc
 
         # Step 7: Prepare geometries for length/coverage tests if needed
-        poly_geom_metric = decoded_geom
-        ref_geom_metric = reference_geom
+        # Use the pre-cached metric geometry for reference
+        ref_geom_metric = reference_geom_metric
 
         if params.use_length_check or params.use_coverage_check:
             try:
+                # Only need to transform the decoded polyline geometry
                 decoded_gdf = gpd.GeoDataFrame([1], geometry=[decoded_geom], crs="EPSG:4326")
-                ref_gdf = gpd.GeoDataFrame([1], geometry=[reference_geom])
-                if ref_gdf.crs is None:
-                    ref_gdf = ref_gdf.set_crs("EPSG:4326")
-
                 decoded_metric = decoded_gdf.to_crs(params.crs_metric)
-                ref_metric = ref_gdf.to_crs(params.crs_metric)
-
                 poly_geom_metric = decoded_metric.geometry.iloc[0]
-                ref_geom_metric = ref_metric.geometry.iloc[0]
             except Exception:
-                # Keep original geometries if transformation fails
-                pass
+                # Keep original geometry if transformation fails
+                poly_geom_metric = decoded_geom
+        else:
+            poly_geom_metric = decoded_geom
 
         # TEST 2: Length Check (if enabled)
         if params.use_length_check:

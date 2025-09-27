@@ -9,6 +9,9 @@ from typing import Dict, Any, Optional
 import pandas as pd
 import geopandas as gpd
 from enum import IntEnum
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing as mp
+import os
 
 from pathlib import Path
 import shutil
@@ -48,7 +51,7 @@ def _parse_timestamp_series(series: pd.Series) -> pd.Series:
     if pd.api.types.is_datetime64_any_dtype(series):
         return series
 
-    parsed = pd.to_datetime(series, errors='coerce')
+    parsed = pd.to_datetime(series, errors='coerce', dayfirst=True)
 
     if parsed.isna().any():
         parsed_dayfirst = pd.to_datetime(series, errors='coerce', dayfirst=True)
@@ -166,6 +169,103 @@ def deduplicate_observations(df: pd.DataFrame) -> pd.DataFrame:
     deduplicated = df.drop_duplicates(subset=['link_id', 'timestamp', 'polyline'], keep='first')
 
     return deduplicated.reset_index(drop=True)
+
+
+def _process_link_chunk(chunk_data):
+    """
+    Worker function to process a chunk of shapefile rows in parallel.
+
+    Args:
+        chunk_data: Tuple containing (chunk_indices, stats_by_link, completeness_params, empty_stats)
+
+    Returns:
+        Dictionary mapping index to computed statistics
+    """
+    chunk_indices, chunk_join_keys, stats_by_link, completeness_params, empty_stats = chunk_data
+
+    # Import here to avoid pickle issues in multiprocessing
+    import numpy as np
+
+    results = {}
+
+    for idx, link_join_key in zip(chunk_indices, chunk_join_keys):
+        # Aggregate statistics for this link
+        stats = stats_by_link.get(link_join_key, empty_stats)
+
+        # Assign transparent metrics directly from stats
+        total_observations = stats.get('total_observations', 0)
+        successful_observations = stats.get('successful_observations', 0)
+
+        # Calculate derived metrics
+        failed_observations = total_observations - successful_observations
+
+        row_updates = {}
+
+        # Backwards compatibility fields (for tests)
+        row_updates['success_rate'] = stats.get('success_rate', 0.0) if total_observations > 0 else np.nan
+        row_updates['total_timestamps'] = stats.get('total_timestamps', 0)
+        row_updates['successful_timestamps'] = stats.get('successful_timestamps', 0)
+        row_updates['failed_timestamps'] = stats.get('failed_timestamps', 0)
+
+        # 1. Performance breakdown percentages (start with these)
+        row_updates['perfect_match_percent'] = stats.get('perfect_match_percent', 0.0) if total_observations > 0 else np.nan
+        row_updates['threshold_pass_percent'] = stats.get('threshold_pass_percent', 0.0) if total_observations > 0 else np.nan
+        row_updates['failed_percent'] = stats.get('failed_percent', 0.0) if total_observations > 0 else np.nan
+        row_updates['total_success_rate'] = stats.get('total_success_rate', 0.0) if total_observations > 0 else np.nan
+
+        # 2. Basic observation counts
+        row_updates['total_observations'] = total_observations
+        row_updates['successful_observations'] = successful_observations
+        row_updates['failed_observations'] = failed_observations
+        row_updates['total_routes'] = stats.get('total_routes', 0)
+
+        # 3. Data completeness (if enabled)
+        if completeness_params:
+            from datetime import datetime, timedelta  # Import here for multiprocessing
+
+            def calculate_expected_observations_local(start_date, end_date, interval_minutes):
+                if not start_date or not end_date or start_date > end_date:
+                    return 0
+                start_dt = datetime.combine(start_date, datetime.min.time())
+                end_dt = datetime.combine(end_date + timedelta(days=1), datetime.min.time())
+                total_minutes = (end_dt - start_dt).total_seconds() / 60
+                return int(total_minutes / interval_minutes)
+
+            expected_observations = calculate_expected_observations_local(
+                completeness_params['start_date'],
+                completeness_params['end_date'],
+                completeness_params['interval_minutes']
+            )
+            missing_observations = max(0, expected_observations - total_observations)
+            data_coverage_percent = (total_observations / expected_observations * 100) if expected_observations > 0 else 0.0
+
+            row_updates['expected_observations'] = expected_observations
+            row_updates['missing_observations'] = missing_observations
+            row_updates['data_coverage_percent'] = data_coverage_percent
+
+        # 4. Route alternative breakdown (at the end)
+        row_updates['single_route_observations'] = stats.get('single_route_observations', 0)
+        row_updates['multi_route_observations'] = stats.get('multi_route_observations', 0)
+        # Legacy fields for backwards compatibility
+        row_updates['single_alt_timestamps'] = stats.get('single_alt_timestamps', 0)
+        row_updates['multi_alt_timestamps'] = stats.get('multi_alt_timestamps', 0)
+
+        # Determine result code for legacy tests
+        legacy_stats = {
+            'total_observations': total_observations,
+            'valid_observations': successful_observations,
+            'invalid_observations': stats.get('invalid_observations', failed_observations),
+            'single_alternative_count': stats.get('single_alternative_count', stats.get('single_route_observations', 0)),
+            'multi_alternative_count': stats.get('multi_alternative_count', stats.get('multi_route_observations', 0))
+        }
+        result_code, result_label, num = determine_result_code(legacy_stats)
+        row_updates['result_code'] = result_code
+        row_updates['result_label'] = result_label
+        row_updates['num'] = num
+
+        results[idx] = row_updates
+
+    return results
 
 
 def aggregate_link_statistics(link_data: pd.DataFrame) -> Dict[str, Any]:
@@ -490,78 +590,97 @@ def generate_link_report(
     if 'link_id' in filtered_df.columns and not filtered_df.empty:
         stats_by_link = {
             link_id: aggregate_link_statistics(group)
-            for link_id, group in filtered_df.groupby('link_id', sort=False)
+            for link_id, group in filtered_df.groupby('link_id', sort=False, observed=True)
         }
     else:
         stats_by_link = {}
 
-    # Process each link in the shapefile
-    for idx, shapefile_row in report_gdf.iterrows():
-        link_join_key = shapefile_row['join_key']
+    # Process links in parallel for better performance
+    cpu_count = os.cpu_count() or 1
+    max_workers = min(8, max(2, cpu_count))
 
-        # Aggregate statistics for this link
-        stats = stats_by_link.get(link_join_key, empty_stats)
+    # Determine optimal chunk size based on dataset size
+    total_links = len(report_gdf)
+    if total_links <= 100:
+        # Small datasets: use single-threaded processing
+        chunk_size = total_links
+        max_workers = 1
+    else:
+        # Large datasets: use parallel processing
+        chunk_size = max(50, total_links // (max_workers * 2))
 
-        # Assign transparent metrics directly from stats
-        total_observations = stats.get('total_observations', 0)
-        successful_observations = stats.get('successful_observations', 0)
+    if max_workers == 1:
+        # Single-threaded processing for small datasets
+        for idx, shapefile_row in report_gdf.iterrows():
+            link_join_key = shapefile_row['join_key']
+            stats = stats_by_link.get(link_join_key, empty_stats)
 
-        # Calculate derived metrics
-        failed_observations = total_observations - successful_observations
+            total_observations = stats.get('total_observations', 0)
+            successful_observations = stats.get('successful_observations', 0)
+            failed_observations = total_observations - successful_observations
 
-        # Update the report with reorganized metrics in requested order
+            # Apply all the statistics updates (same logic as worker function)
+            report_gdf.at[idx, 'success_rate'] = stats.get('success_rate', 0.0) if total_observations > 0 else np.nan
+            report_gdf.at[idx, 'total_timestamps'] = stats.get('total_timestamps', 0)
+            report_gdf.at[idx, 'successful_timestamps'] = stats.get('successful_timestamps', 0)
+            report_gdf.at[idx, 'failed_timestamps'] = stats.get('failed_timestamps', 0)
+            report_gdf.at[idx, 'perfect_match_percent'] = stats.get('perfect_match_percent', 0.0) if total_observations > 0 else np.nan
+            report_gdf.at[idx, 'threshold_pass_percent'] = stats.get('threshold_pass_percent', 0.0) if total_observations > 0 else np.nan
+            report_gdf.at[idx, 'failed_percent'] = stats.get('failed_percent', 0.0) if total_observations > 0 else np.nan
+            report_gdf.at[idx, 'total_success_rate'] = stats.get('total_success_rate', 0.0) if total_observations > 0 else np.nan
+            report_gdf.at[idx, 'total_observations'] = total_observations
+            report_gdf.at[idx, 'successful_observations'] = successful_observations
+            report_gdf.at[idx, 'failed_observations'] = failed_observations
+            report_gdf.at[idx, 'total_routes'] = stats.get('total_routes', 0)
 
-        # Backwards compatibility fields (for tests)
-        report_gdf.at[idx, 'success_rate'] = stats.get('success_rate', 0.0) if total_observations > 0 else np.nan
-        report_gdf.at[idx, 'total_timestamps'] = stats.get('total_timestamps', 0)
-        report_gdf.at[idx, 'successful_timestamps'] = stats.get('successful_timestamps', 0)
-        report_gdf.at[idx, 'failed_timestamps'] = stats.get('failed_timestamps', 0)
+            if completeness_params:
+                expected_observations = calculate_expected_observations(
+                    completeness_params['start_date'], completeness_params['end_date'], completeness_params['interval_minutes']
+                )
+                missing_observations = max(0, expected_observations - total_observations)
+                data_coverage_percent = (total_observations / expected_observations * 100) if expected_observations > 0 else 0.0
+                report_gdf.at[idx, 'expected_observations'] = expected_observations
+                report_gdf.at[idx, 'missing_observations'] = missing_observations
+                report_gdf.at[idx, 'data_coverage_percent'] = data_coverage_percent
 
-        # 1. Performance breakdown percentages (start with these)
-        report_gdf.at[idx, 'perfect_match_percent'] = stats.get('perfect_match_percent', 0.0) if total_observations > 0 else np.nan
-        report_gdf.at[idx, 'threshold_pass_percent'] = stats.get('threshold_pass_percent', 0.0) if total_observations > 0 else np.nan
-        report_gdf.at[idx, 'failed_percent'] = stats.get('failed_percent', 0.0) if total_observations > 0 else np.nan
-        report_gdf.at[idx, 'total_success_rate'] = stats.get('total_success_rate', 0.0) if total_observations > 0 else np.nan
+            report_gdf.at[idx, 'single_route_observations'] = stats.get('single_route_observations', 0)
+            report_gdf.at[idx, 'multi_route_observations'] = stats.get('multi_route_observations', 0)
+            report_gdf.at[idx, 'single_alt_timestamps'] = stats.get('single_alt_timestamps', 0)
+            report_gdf.at[idx, 'multi_alt_timestamps'] = stats.get('multi_alt_timestamps', 0)
 
-        # 2. Basic observation counts
-        report_gdf.at[idx, 'total_observations'] = total_observations
-        report_gdf.at[idx, 'successful_observations'] = successful_observations
-        report_gdf.at[idx, 'failed_observations'] = failed_observations
-        report_gdf.at[idx, 'total_routes'] = stats.get('total_routes', 0)
+            legacy_stats = {
+                'total_observations': total_observations, 'valid_observations': successful_observations,
+                'invalid_observations': stats.get('invalid_observations', failed_observations),
+                'single_alternative_count': stats.get('single_alternative_count', stats.get('single_route_observations', 0)),
+                'multi_alternative_count': stats.get('multi_alternative_count', stats.get('multi_route_observations', 0))
+            }
+            result_code, result_label, num = determine_result_code(legacy_stats)
+            report_gdf.at[idx, 'result_code'] = result_code
+            report_gdf.at[idx, 'result_label'] = result_label
+            report_gdf.at[idx, 'num'] = num
+    else:
+        # Parallel processing for large datasets
+        indices = list(report_gdf.index)
+        join_keys = [report_gdf.at[idx, 'join_key'] for idx in indices]
 
-        # 3. Data completeness (if enabled)
-        if completeness_params:
-            expected_observations = calculate_expected_observations(
-                completeness_params['start_date'],
-                completeness_params['end_date'],
-                completeness_params['interval_minutes']
-            )
-            missing_observations = max(0, expected_observations - total_observations)
-            data_coverage_percent = (total_observations / expected_observations * 100) if expected_observations > 0 else 0.0
+        # Create chunks
+        chunks = []
+        for i in range(0, len(indices), chunk_size):
+            chunk_indices = indices[i:i + chunk_size]
+            chunk_join_keys = join_keys[i:i + chunk_size]
+            chunks.append((chunk_indices, chunk_join_keys, stats_by_link, completeness_params, empty_stats))
 
-            report_gdf.at[idx, 'expected_observations'] = expected_observations
-            report_gdf.at[idx, 'missing_observations'] = missing_observations
-            report_gdf.at[idx, 'data_coverage_percent'] = data_coverage_percent
+        # Process chunks in parallel
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            future_to_chunk = {executor.submit(_process_link_chunk, chunk): chunk for chunk in chunks}
 
-        # 4. Route alternative breakdown (at the end)
-        report_gdf.at[idx, 'single_route_observations'] = stats.get('single_route_observations', 0)
-        report_gdf.at[idx, 'multi_route_observations'] = stats.get('multi_route_observations', 0)
-        # Legacy fields for backwards compatibility
-        report_gdf.at[idx, 'single_alt_timestamps'] = stats.get('single_alt_timestamps', 0)
-        report_gdf.at[idx, 'multi_alt_timestamps'] = stats.get('multi_alt_timestamps', 0)
+            for future in as_completed(future_to_chunk):
+                chunk_results = future.result()
 
-        # Determine result code for legacy tests
-        legacy_stats = {
-            'total_observations': total_observations,
-            'valid_observations': successful_observations,
-            'invalid_observations': stats.get('invalid_observations', failed_observations),
-            'single_alternative_count': stats.get('single_alternative_count', stats.get('single_route_observations', 0)),
-            'multi_alternative_count': stats.get('multi_alternative_count', stats.get('multi_route_observations', 0))
-        }
-        result_code, result_label, num = determine_result_code(legacy_stats)
-        report_gdf.at[idx, 'result_code'] = result_code
-        report_gdf.at[idx, 'result_label'] = result_label
-        report_gdf.at[idx, 'num'] = num
+                # Apply results to the report_gdf
+                for idx, row_updates in chunk_results.items():
+                    for column, value in row_updates.items():
+                        report_gdf.at[idx, column] = value
 
     # Clean up temporary join key
     report_gdf = report_gdf.drop(columns=['join_key'])
@@ -647,16 +766,23 @@ def write_shapefile_with_results(gdf: gpd.GeoDataFrame, output_path: str) -> Non
         # Apply column mapping for field name truncation
         output_gdf = output_gdf.rename(columns=column_mapping)
 
+        # Optimize data types for better shapefile performance
         for col in ['perfect_p', 'thresh_p', 'failed_p', 'total_succ', 'coverage_p']:
             if col in output_gdf.columns:
-                output_gdf[col] = pd.to_numeric(output_gdf[col], errors='coerce')
+                output_gdf[col] = pd.to_numeric(output_gdf[col], errors='coerce').astype('float32')
 
         for col in ['total_obs', 'success_ob', 'failed_obs', 'total_rts', 'expect_obs', 'missing_ob', 'single_obs', 'multi_obs']:
             if col in output_gdf.columns:
-                output_gdf[col] = output_gdf[col].astype(int)
+                # Use int32 for better performance and smaller file size
+                output_gdf[col] = output_gdf[col].astype('int32')
 
         if 'num' in output_gdf.columns:
-            output_gdf['num'] = pd.to_numeric(output_gdf['num'], errors='coerce')
+            output_gdf['num'] = pd.to_numeric(output_gdf['num'], errors='coerce').astype('float32')
+
+        # Optimize geometry for writing (simplify very small details if needed)
+        if len(output_gdf) > 1000:  # Only for large shapefiles
+            # Remove any invalid geometries
+            output_gdf = output_gdf[output_gdf.geometry.is_valid]
 
         if output_gdf.crs is None:
             output_gdf = output_gdf.set_crs('EPSG:4326')
@@ -801,6 +927,10 @@ def extract_best_valid_observations(validated_df: pd.DataFrame) -> pd.DataFrame:
         elif 'name' in df.columns:
             df['link_id'] = df['name']
 
+    # Convert link_id to categorical for faster groupby operations
+    if 'link_id' in df.columns:
+        df['link_id'] = df['link_id'].astype('category')
+
     # Get timestamp column name
     timestamp_col = 'timestamp' if 'timestamp' in df.columns else 'Timestamp'
 
@@ -830,33 +960,40 @@ def extract_best_valid_observations(validated_df: pd.DataFrame) -> pd.DataFrame:
 
     # Add score column for valid observations
     if 'is_valid' in df.columns:
-        df.loc[df['is_valid'] == True, 'selection_score'] = df[df['is_valid'] == True].apply(calculate_score, axis=1)
-    else:
-        return pd.DataFrame(columns=df.columns)  # No validity column
+        # Filter to valid observations only
+        valid_df = df[df['is_valid'] == True].copy()
+        if valid_df.empty:
+            return pd.DataFrame(columns=df.columns)
 
-    # Group by link_id and timestamp
-    best_observations = []
+        # Vectorized score calculation (much faster than apply)
+        valid_df['selection_score'] = 0.0
 
-    for (link_id, timestamp), group in df.groupby(['link_id', timestamp_col], sort=False):
-        # Get valid alternatives
-        valid_alternatives = group[group['is_valid'] == True] if 'is_valid' in group.columns else pd.DataFrame()
+        # Hausdorff distance (most important - lower is better)
+        if 'hausdorff_distance' in valid_df.columns:
+            mask = valid_df['hausdorff_distance'].notna()
+            valid_df.loc[mask, 'selection_score'] -= valid_df.loc[mask, 'hausdorff_distance'] * 1000
 
-        if not valid_alternatives.empty:
-            if len(valid_alternatives) == 1:
-                # Single valid alternative - keep it
-                best_observations.append(valid_alternatives)
-            else:
-                # Multiple valid alternatives - select best score
-                best_idx = valid_alternatives['selection_score'].idxmax()
-                best_observations.append(valid_alternatives.loc[[best_idx]])
+        # Length ratio deviation (second priority - closer to 1.0 is better)
+        if 'length_ratio' in valid_df.columns:
+            mask = valid_df['length_ratio'].notna()
+            valid_df.loc[mask, 'selection_score'] -= abs(valid_df.loc[mask, 'length_ratio'] - 1.0) * 100
 
-    # Combine all best observations
-    if best_observations:
-        result = pd.concat(best_observations, ignore_index=True)
+        # Coverage percent (third priority - higher is better)
+        if 'coverage_percent' in valid_df.columns:
+            mask = valid_df['coverage_percent'].notna()
+            valid_df.loc[mask, 'selection_score'] += valid_df.loc[mask, 'coverage_percent'] * 1
+
+        # Use groupby with idxmax to get best alternative per group (much faster)
+        grouped = valid_df.groupby(['link_id', timestamp_col], sort=False, observed=True)
+
+        # Get indices of rows with maximum score per group
+        best_indices = grouped['selection_score'].idxmax()
+
+        # Extract best observations using the indices
+        result = valid_df.loc[best_indices].copy()
 
         # Remove temporary score column
-        if 'selection_score' in result.columns:
-            result = result.drop(columns=['selection_score'])
+        result = result.drop(columns=['selection_score'])
 
         # Sort by link_id, timestamp, and route_alternative if present
         sort_cols = ['link_id', timestamp_col]
@@ -1361,7 +1498,7 @@ def create_failed_observations_reference_shapefile(
                 # Core identifiers
                 'link_id': link_id,
                 'data_sourc': 'reference_shapefile',
-                'valid_code': link_group['valid_code'].iloc[0],
+                'valid_code': link_group['valid_code'].iloc[0] if not link_group.empty and 'valid_code' in link_group.columns else 92,
 
                 # Hausdorff metrics (always present)
                 'avg_hausdo': hausdorff_distances.mean() if not hausdorff_distances.empty else None,

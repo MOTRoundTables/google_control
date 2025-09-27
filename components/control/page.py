@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import suppress
 
 # Import validation modules from the same component
-from .validator import validate_dataframe_batch, ValidationParameters
+from .validator import validate_dataframe_batch, validate_dataframe_batch_parallel, ValidationParameters
 from .report import (
     generate_link_report,
     write_shapefile_with_results,
@@ -290,6 +290,33 @@ def control_page():
                 key="polyline_precision_input"
             )
             st.session_state.control_params['polyline_precision'] = polyline_precision
+
+            # Performance Settings
+            st.markdown("**🚀 Performance Settings**")
+            enable_parallel = st.checkbox(
+                "Enable parallel processing",
+                value=st.session_state.control_params.get('enable_parallel', True),
+                help="Use multiple CPU cores for faster validation. "
+                     "Recommended for datasets over 5000 rows. "
+                     "Disable for debugging or memory-constrained systems.",
+                key="enable_parallel_input"
+            )
+            st.session_state.control_params['enable_parallel'] = enable_parallel
+
+            if enable_parallel:
+                cpu_count = os.cpu_count() or 1
+                max_workers = st.slider(
+                    "CPU cores to use",
+                    min_value=1,
+                    max_value=cpu_count,
+                    value=min(4, cpu_count),
+                    help=f"System has {cpu_count} CPU cores available. "
+                         f"More cores = faster processing but higher memory usage.",
+                    key="max_workers_input"
+                )
+                st.session_state.control_params['max_workers'] = max_workers
+            else:
+                st.session_state.control_params['max_workers'] = 1
 
         # Set default values for disabled parameters
         if not use_hausdorff:
@@ -591,8 +618,27 @@ def run_control_validation(csv_file, shapefile_file, output_dir,
         status_text.text(validation_msg)
         progress_bar.progress(50)
 
-        # Use batch validation
-        result_df = validate_dataframe_batch(csv_df, shapefile_gdf, params)
+        # Use batch validation with progress tracking
+        def progress_callback(message):
+            status_text.text(f"⏳ {message}")
+
+        # Choose parallel or sequential validation based on user settings
+        enable_parallel = st.session_state.control_params.get('enable_parallel', True)
+        max_workers = st.session_state.control_params.get('max_workers', 1)
+
+        if enable_parallel and len(csv_df) >= 5000:
+            status_text.text(f"🚀 Using parallel validation with {max_workers} CPU cores...")
+            result_df = validate_dataframe_batch_parallel(
+                csv_df, shapefile_gdf, params,
+                max_workers=max_workers,
+                progress_callback=progress_callback
+            )
+        else:
+            if enable_parallel and len(csv_df) < 5000:
+                status_text.text("🔍 Using sequential validation (dataset too small for parallel benefit)...")
+            else:
+                status_text.text("🔍 Using sequential validation...")
+            result_df = validate_dataframe_batch(csv_df, shapefile_gdf, params, progress_callback=progress_callback)
 
         # Update progress
         progress_bar.progress(70)
@@ -680,9 +726,21 @@ def _maybe_add_zip_download(file_path: Path, key: str, output_files: dict, thres
     output_files[f"{key}_zip"] = str(zip_path)
 
 
-def save_validation_results(result_df, report_gdf, output_dir, generate_shapefile, completeness_params=None):
-    """Save validation results to files"""
+def save_validation_results(result_df, report_gdf, output_dir, generate_shapefile, completeness_params=None,
+                           progress_callback=None, status_callback=None):
+    """Save validation results to files with progress tracking"""
     output_files = {}
+
+    # File tracking for progress
+    total_files = 0
+    completed_files = 0
+
+    def update_progress():
+        nonlocal completed_files
+        completed_files += 1
+        if progress_callback:
+            progress_pct = int((completed_files / total_files) * 100)
+            progress_callback(90 + (progress_pct * 10 // 100))  # Scale to 90-100% range
 
     validated_csv_path = Path(output_dir) / "validated_data.csv"
 
@@ -702,24 +760,160 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
     cpu_count = os.cpu_count() or 1
     max_workers = min(8, max(2, cpu_count))
 
-    def _write_csv(dataframe, destination, columns=None):
+    def _write_csv(dataframe, destination, columns=None, file_description=None):
         destination = Path(destination)
-        dataframe.to_csv(destination, index=False, encoding='utf-8-sig', columns=columns)
+        size_mb = len(dataframe) * len(dataframe.columns) * 50 / (1024 * 1024)  # Rough estimate
+        if status_callback and file_description:
+            status_callback(f"💾 Saving {file_description} ({size_mb:.1f}MB estimated)...")
+
+        # Optimize DataFrame memory usage before writing
+        if not dataframe.empty:
+            # Convert categorical columns to string for better compression
+            for col in dataframe.select_dtypes(include=['category']):
+                dataframe[col] = dataframe[col].astype(str)
+
+            # Optimize numeric columns
+            for col in dataframe.select_dtypes(include=['int64']):
+                if dataframe[col].min() >= 0 and dataframe[col].max() <= 2**31 - 1:
+                    dataframe[col] = dataframe[col].astype('int32')
+
+            for col in dataframe.select_dtypes(include=['float64']):
+                # Check if column can be converted to float32 without significant precision loss
+                if dataframe[col].notna().any():
+                    max_val = dataframe[col].abs().max()
+                    if max_val <= 3.4e+38:  # float32 max
+                        dataframe[col] = dataframe[col].astype('float32')
+
+        # For very large files (>50MB), disable compression as it's too slow
+        # For medium files (10-50MB), use fastest compression
+        # For small files (<10MB), use standard writing
+        file_size_mb = size_mb
+
+        if file_size_mb > 50:
+            # Very large files: Use fastest possible CSV writing
+            if status_callback and file_description:
+                status_callback(f"💾 Large file detected ({file_size_mb:.1f}MB) - using fastest CSV writing...")
+
+            # Try to use faster CSV libraries if available
+            try:
+                # Use faster method with chunked writing for large files
+                chunk_size = 100000  # Write in 100k row chunks
+
+                if len(dataframe) > chunk_size:
+                    # Write header first
+                    with open(destination, 'w', encoding='utf-8-sig', newline='') as f:
+                        # Write header
+                        if columns:
+                            f.write(','.join(columns) + '\n')
+                        else:
+                            f.write(','.join(dataframe.columns) + '\n')
+
+                    # Append chunks
+                    for start_idx in range(0, len(dataframe), chunk_size):
+                        end_idx = min(start_idx + chunk_size, len(dataframe))
+                        chunk = dataframe.iloc[start_idx:end_idx]
+
+                        chunk.to_csv(
+                            destination,
+                            mode='a',
+                            index=False,
+                            header=False,
+                            encoding='utf-8-sig',
+                            columns=columns,
+                            lineterminator='\n',
+                            float_format='%.6g'
+                        )
+                else:
+                    # Standard optimized writing for smaller files
+                    dataframe.to_csv(
+                        destination,
+                        index=False,
+                        encoding='utf-8-sig',
+                        columns=columns,
+                        lineterminator='\n',
+                        float_format='%.6g'
+                    )
+            except Exception:
+                # Fallback to standard method
+                dataframe.to_csv(
+                    destination,
+                    index=False,
+                    encoding='utf-8-sig',
+                    columns=columns,
+                    lineterminator='\n',
+                    float_format='%.6g'
+                )
+        elif file_size_mb > 10:
+            # Medium files: Fast compression (level 1)
+            destination_gz = destination.with_suffix(destination.suffix + '.gz')
+            import gzip
+
+            if status_callback and file_description:
+                status_callback(f"💾 Using fast compression for {file_description} ({file_size_mb:.1f}MB)...")
+
+            # Use fastest compression level and optimized writing
+            with gzip.open(destination_gz, 'wt', encoding='utf-8-sig', compresslevel=1) as f:
+                dataframe.to_csv(
+                    f,
+                    index=False,
+                    columns=columns,
+                    lineterminator='\n',
+                    float_format='%.6g'
+                )
+
+            destination = destination_gz
+        else:
+            # Small files: Standard optimized writing
+            dataframe.to_csv(
+                destination,
+                index=False,
+                encoding='utf-8-sig',
+                columns=columns,
+                lineterminator='\n',
+                float_format='%.6g'
+            )
+
+        actual_size_mb = destination.stat().st_size / (1024 * 1024)
+        if status_callback and file_description:
+            status_callback(f"✅ Saved {file_description} ({actual_size_mb:.1f}MB)")
+
         return str(destination)
+
+    # Count total files to be created
+    file_operations = [
+        ('validated_csv', result_df_sorted, validated_csv_path, 'validated_data.csv'),
+    ]
+
+    # Add conditional files to count
+    best_valid_df = extract_best_valid_observations(result_df_sorted)
+    if not best_valid_df.empty:
+        file_operations.append(('best_valid_observations_csv', best_valid_df,
+                               Path(output_dir) / "best_valid_observations.csv", 'best_valid_observations.csv'))
+
+    validation_failed_df = extract_failed_observations(result_df_sorted)
+    if not validation_failed_df.empty:
+        validation_failed_df = validation_failed_df[
+            validation_failed_df.get('valid_code', 0).between(1, 3)
+        ].copy()
+        if not validation_failed_df.empty:
+            file_operations.append(('failed_observations_csv', validation_failed_df,
+                                   Path(output_dir) / "failed_observations.csv", 'failed_observations.csv'))
+
+    total_files = len(file_operations) + (6 if generate_shapefile else 0)  # Estimate shapefiles
 
     future_to_job = {}
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        def submit_csv(key, dataframe, destination, columns=None):
-            future = executor.submit(_write_csv, dataframe, destination, columns)
-            future_to_job[future] = key
+        def submit_csv(key, dataframe, destination, description, columns=None):
+            future = executor.submit(_write_csv, dataframe, destination, columns, description)
+            future_to_job[future] = (key, description)
 
-        submit_csv('validated_csv', result_df_sorted, validated_csv_path)
+        submit_csv('validated_csv', result_df_sorted, validated_csv_path, 'validated_data.csv')
 
         # Extract best valid observations
         best_valid_df = extract_best_valid_observations(result_df_sorted)
         best_csv_path = Path(output_dir) / "best_valid_observations.csv"
-        submit_csv('best_valid_observations_csv', best_valid_df, best_csv_path)
+        submit_csv('best_valid_observations_csv', best_valid_df, best_csv_path, 'best_valid_observations.csv')
 
         # FAILED OBSERVATIONS
         validation_failed_df = extract_failed_observations(result_df_sorted)
@@ -728,7 +922,7 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
                 validation_failed_df.get('valid_code', 0).between(1, 3)
             ].copy()
             failed_csv_path = Path(output_dir) / "failed_observations.csv"
-            submit_csv('failed_observations_csv', validation_failed_df, failed_csv_path)
+            submit_csv('failed_observations_csv', validation_failed_df, failed_csv_path, 'failed_observations.csv')
         else:
             failed_csv_path = None
 
@@ -737,14 +931,14 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
         if completeness_params:
             missing_observations_df = extract_missing_observations(result_df_sorted, completeness_params, report_gdf)
             missing_csv_path = Path(output_dir) / "missing_observations.csv"
-            submit_csv('missing_observations_csv', missing_observations_df, missing_csv_path)
+            submit_csv('missing_observations_csv', missing_observations_df, missing_csv_path, 'missing_observations.csv')
         else:
             missing_csv_path = None
 
         # NO-DATA LINKS
         no_data_links_df = extract_no_data_links(result_df_sorted, report_gdf)
         no_data_csv_path = Path(output_dir) / "no_data_links.csv"
-        submit_csv('no_data_links_csv', no_data_links_df, no_data_csv_path)
+        submit_csv('no_data_links_csv', no_data_links_df, no_data_csv_path, 'no_data_links.csv')
 
         # Generate link report with statistics
         report_with_stats_gdf = report_gdf.copy()
@@ -795,29 +989,49 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
         ])
         ordered_cols.extend([col for col in base_cols if col not in ordered_cols])
 
-        submit_csv('link_report_csv', report_with_stats_gdf, report_csv_path, columns=ordered_cols)
+        submit_csv('link_report_csv', report_with_stats_gdf, report_csv_path, 'link_report.csv', columns=ordered_cols)
 
         # Wait for CSV jobs and register outputs
         for future in as_completed(tuple(future_to_job.keys())):
-            key = future_to_job.pop(future)
+            key, description = future_to_job.pop(future)
             path_str = future.result()
             path_obj = Path(path_str)
             output_files[key] = path_str
             _maybe_add_zip_download(path_obj, key, output_files)
+            update_progress()
+            if status_callback:
+                status_callback(f"✅ Completed {description} ({completed_files}/{total_files})")
 
     # Generate shapefiles when requested
     if generate_shapefile:
+        if status_callback:
+            status_callback(f"🗺️ Creating link report shapefile...")
+
         report_shp_path = Path(output_dir) / "link_report.shp"
         try:
             write_shapefile_with_results(report_with_stats_gdf, str(report_shp_path))
-            print(f"Created link report shapefile: {report_shp_path}")
+            update_progress()
+            if status_callback:
+                file_size_mb = report_shp_path.stat().st_size / (1024 * 1024)
+                status_callback(f"✅ Created link report shapefile ({file_size_mb:.1f}MB)")
         except Exception as e:
             print(f"Warning: Failed to create link report shapefile: {e}")
+            if status_callback:
+                status_callback(f"❌ Failed to create link report shapefile: {e}")
 
+        if status_callback:
+            status_callback(f"📦 Packaging link report shapefile...")
         shapefile_zip_path = create_shapefile_zip_package(str(report_shp_path), output_dir)
         output_files['link_report_zip'] = str(shapefile_zip_path)
+        update_progress()
+        if status_callback:
+            zip_size_mb = Path(shapefile_zip_path).stat().st_size / (1024 * 1024)
+            status_callback(f"✅ Packaged link report shapefile ({zip_size_mb:.1f}MB)")
 
         if not validation_failed_df.empty:
+            if status_callback:
+                status_callback(f"🗺️ Creating failed observations shapefile...")
+
             failed_shp_path = Path(output_dir) / "failed_observations.shp"
             try:
                 create_failed_observations_shapefile(
@@ -825,10 +1039,23 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
                     report_gdf,
                     str(failed_shp_path)
                 )
+                update_progress()
+                if status_callback:
+                    file_size_mb = failed_shp_path.stat().st_size / (1024 * 1024)
+                    status_callback(f"✅ Created failed observations shapefile ({file_size_mb:.1f}MB)")
+
+                if status_callback:
+                    status_callback(f"📦 Packaging failed observations shapefile...")
                 failed_shapefile_zip_path = create_shapefile_zip_package(str(failed_shp_path), output_dir)
                 output_files['failed_observations_zip'] = str(failed_shapefile_zip_path)
+                update_progress()
+                if status_callback:
+                    zip_size_mb = Path(failed_shapefile_zip_path).stat().st_size / (1024 * 1024)
+                    status_callback(f"✅ Packaged failed observations shapefile ({zip_size_mb:.1f}MB)")
             except Exception as e:
                 print(f"Warning: Failed to create failed observations shapefile: {e}")
+                if status_callback:
+                    status_callback(f"❌ Failed to create failed observations shapefile: {e}")
 
             failed_ref_shp_path = Path(output_dir) / "failed_observations_reference.shp"
             try:
@@ -1396,7 +1623,8 @@ def display_control_results():
             else:
                 # Fallback to row-based counting if grouping columns not available
                 valid_count = validated_df['is_valid'].sum()
-                valid_pct = (valid_count / total_observations * 100) if total_observations > 0 else 0
+                total_rows_for_pct = len(validated_df)
+                valid_pct = (valid_count / total_rows_for_pct * 100) if total_rows_for_pct > 0 else 0
                 st.metric("Valid Observations", f"{valid_count:,}", f"{valid_pct:.1f}%")
 
     with col3:
