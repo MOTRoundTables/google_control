@@ -762,7 +762,19 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
 
     def _write_csv(dataframe, destination, columns=None, file_description=None):
         destination = Path(destination)
-        size_mb = len(dataframe) * len(dataframe.columns) * 50 / (1024 * 1024)  # Rough estimate
+        # More accurate file size estimation based on actual data
+        if not dataframe.empty:
+            # Sample first 1000 rows to estimate average row size
+            sample_size = min(1000, len(dataframe))
+            sample_df = dataframe.head(sample_size)
+
+            # Convert to CSV string and measure actual size
+            sample_csv = sample_df.to_csv(index=False, columns=columns, float_format='%.6g')
+            avg_row_size = len(sample_csv.encode('utf-8')) / sample_size
+            estimated_size_bytes = avg_row_size * len(dataframe)
+            size_mb = estimated_size_bytes / (1024 * 1024)
+        else:
+            size_mb = 0.1
         if status_callback and file_description:
             status_callback(f"💾 Saving {file_description} ({size_mb:.1f}MB estimated)...")
 
@@ -784,86 +796,28 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
                     if max_val <= 3.4e+38:  # float32 max
                         dataframe[col] = dataframe[col].astype('float32')
 
-        # For very large files (>50MB), disable compression as it's too slow
-        # For medium files (10-50MB), use fastest compression
-        # For small files (<10MB), use standard writing
+        # Simplified file writing strategy with accurate size estimation
         file_size_mb = size_mb
 
-        if file_size_mb > 50:
-            # Very large files: Use fastest possible CSV writing
+        if file_size_mb > 100:
+            # Very large files (>100MB): Use optimized pandas writing without compression
             if status_callback and file_description:
-                status_callback(f"💾 Large file detected ({file_size_mb:.1f}MB) - using fastest CSV writing...")
+                status_callback(f"💾 Large file ({file_size_mb:.1f}MB) - using fast uncompressed writing...")
 
-            # Try to use faster CSV libraries if available
-            try:
-                # Use faster method with chunked writing for large files
-                chunk_size = 100000  # Write in 100k row chunks
-
-                if len(dataframe) > chunk_size:
-                    # Write header first
-                    with open(destination, 'w', encoding='utf-8-sig', newline='') as f:
-                        # Write header
-                        if columns:
-                            f.write(','.join(columns) + '\n')
-                        else:
-                            f.write(','.join(dataframe.columns) + '\n')
-
-                    # Append chunks
-                    for start_idx in range(0, len(dataframe), chunk_size):
-                        end_idx = min(start_idx + chunk_size, len(dataframe))
-                        chunk = dataframe.iloc[start_idx:end_idx]
-
-                        chunk.to_csv(
-                            destination,
-                            mode='a',
-                            index=False,
-                            header=False,
-                            encoding='utf-8-sig',
-                            columns=columns,
-                            lineterminator='\n',
-                            float_format='%.6g'
-                        )
-                else:
-                    # Standard optimized writing for smaller files
-                    dataframe.to_csv(
-                        destination,
-                        index=False,
-                        encoding='utf-8-sig',
-                        columns=columns,
-                        lineterminator='\n',
-                        float_format='%.6g'
-                    )
-            except Exception:
-                # Fallback to standard method
-                dataframe.to_csv(
-                    destination,
-                    index=False,
-                    encoding='utf-8-sig',
-                    columns=columns,
-                    lineterminator='\n',
-                    float_format='%.6g'
-                )
-        elif file_size_mb > 10:
-            # Medium files: Fast compression (level 1)
-            destination_gz = destination.with_suffix(destination.suffix + '.gz')
-            import gzip
-
-            if status_callback and file_description:
-                status_callback(f"💾 Using fast compression for {file_description} ({file_size_mb:.1f}MB)...")
-
-            # Use fastest compression level and optimized writing
-            with gzip.open(destination_gz, 'wt', encoding='utf-8-sig', compresslevel=1) as f:
-                dataframe.to_csv(
-                    f,
-                    index=False,
-                    columns=columns,
-                    lineterminator='\n',
-                    float_format='%.6g'
-                )
-
-            destination = destination_gz
+            dataframe.to_csv(
+                destination,
+                index=False,
+                encoding='utf-8-sig',
+                columns=columns,
+                lineterminator='\n',
+                float_format='%.6g'
+            )
         else:
-            # Small files: Standard optimized writing
+            # Medium and small files: Use standard optimized pandas writing
+            # Pandas to_csv is already highly optimized for most cases
+            if status_callback and file_description:
+                status_callback(f"💾 Writing {file_description} ({file_size_mb:.1f}MB)...")
+
             dataframe.to_csv(
                 destination,
                 index=False,
