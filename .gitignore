@@ -213,3 +213,4 @@ test_data/data\ copy.csv
 test_data/*.csv
 # Keep control test data
 !test_data/control/
+components/control/methodology_old.md
