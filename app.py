@@ -24,10 +24,21 @@ from components.maps import render_maps_page
 # Import control component
 from components.control import control_page
 
+# Try to import streamlit-option-menu for professional icons
+try:
+    from streamlit_option_menu import option_menu
+    HAS_OPTION_MENU = True
+except ImportError:
+    HAS_OPTION_MENU = False
+
+
+# Lucide icon functions removed due to HTML rendering issues in Streamlit
+# Reverted to emoji icons for better compatibility
+
 # Configure Streamlit page
 st.set_page_config(
     page_title="Google Maps Link Monitoring Processor",
-    page_icon="🚗",
+    page_icon="🗺️",  # Keep emoji for favicon compatibility
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -257,28 +268,85 @@ def create_minimal_shapefile_companions(shp_path: str):
 
 def main():
     """Main Streamlit application entry point"""
-    
-    # Page navigation in sidebar
-    st.sidebar.title("🚗 Navigation")
-    
+
     # Initialize current page in session state if not exists
     if 'current_page' not in st.session_state:
-        st.session_state.current_page = "🔍 Dataset Control"
-    
-    # Use radio buttons instead of selectbox to avoid double-click issues
-    pages = ["🔍 Dataset Control", "🏠 Hour Aggregation", "📊 Hour Aggregation Results", "🗺️ Aggregated Maps", "🔬 Control Methodology", "📚 Hour Aggregation Methodology"]
-    
-    # Get current page for radio button selection
-    current_page = st.session_state.current_page
-    current_index = pages.index(current_page) if current_page in pages else 0
-    
-    # Use radio buttons for navigation
-    selected_page = st.sidebar.radio(
-        "Choose a page:",
-        pages,
-        index=current_index,
-        key="page_radio"
-    )
+        st.session_state.current_page = "Dataset Control"
+
+    # Define pages with professional icons using Unicode symbols
+    page_configs = [
+        ("Dataset Control", "🛡️", "Dataset Control"),
+        ("Hour Aggregation", "⏰", "Hour Aggregation"),
+        ("Hour Aggregation Results", "📊", "Hour Aggregation Results"),
+        ("Aggregated Maps", "🗺️", "Aggregated Maps"),
+        ("Control Methodology", "🔬", "Control Methodology"),
+        ("Hour Aggregation Methodology", "📚", "Hour Aggregation Methodology")
+    ]
+
+    # Try professional option menu first
+    if HAS_OPTION_MENU:
+        # Use streamlit-option-menu for professional navigation in sidebar
+        with st.sidebar:
+            st.markdown("### Navigation")
+
+            selected_page = option_menu(
+                menu_title=None,
+                options=[config[0] for config in page_configs],
+                icons=["shield-check", "clock", "activity", "map", "tools", "book"],
+                menu_icon="cast",
+                default_index=0,
+                orientation="vertical",
+                key="nav_menu",
+                styles={
+                    "container": {"padding": "0!important", "background-color": "#f0f2f6"},
+                    "icon": {"color": "#0068c9", "font-size": "16px"},
+                    "nav-link": {
+                        "font-size": "14px",
+                        "text-align": "left",
+                        "margin": "0px",
+                        "color": "#262730",
+                        "background-color": "#f0f2f6",
+                        "--hover-color": "#e8f4f8"
+                    },
+                    "nav-link-selected": {
+                        "background-color": "#e8f4f8",
+                        "color": "#000000 !important",
+                        "font-weight": "bold"
+                    },
+                }
+            )
+    else:
+        # Fallback to enhanced radio buttons with Unicode icons
+        st.sidebar.markdown("""
+        <div style="display: flex; align-items: center; margin-bottom: 1rem;">
+            <span style="font-size: 24px; margin-right: 8px;">🧭</span>
+            <h3 style="margin: 0;">Navigation</h3>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Get current page for radio button selection
+        current_page = st.session_state.current_page
+        pages = [config[0] for config in page_configs]
+        current_index = pages.index(current_page) if current_page in pages else 0
+
+        # Create enhanced radio options with icons
+        radio_options = []
+        for page_key, icon, display_name in page_configs:
+            radio_options.append(f"{icon} {display_name}")
+
+        selected_option = st.sidebar.radio(
+            "Choose a page:",
+            radio_options,
+            index=current_index,
+            key="page_radio"
+        )
+
+        # Extract page key from selected option
+        selected_page = None
+        for i, (page_key, icon, display_name) in enumerate(page_configs):
+            if selected_option == f"{icon} {display_name}":
+                selected_page = page_key
+                break
     
     # Update session state only if page actually changed
     if selected_page != st.session_state.current_page:
@@ -290,18 +358,18 @@ def main():
     
     # Use the current page from session state (not the selected page) to avoid conflicts
     page = st.session_state.current_page
-    
-    if page == "🏠 Hour Aggregation":
+
+    if page == "Hour Aggregation":
         main_processing_page()
-    elif page == "🗺️ Aggregated Maps":
+    elif page == "Aggregated Maps":
         maps_page()
-    elif page == "📊 Hour Aggregation Results":
+    elif page == "Hour Aggregation Results":
         results_page()
-    elif page == "🔍 Dataset Control":
+    elif page == "Dataset Control":
         control_page()
-    elif page == "📚 Hour Aggregation Methodology":
+    elif page == "Hour Aggregation Methodology":
         methodology_page()
-    elif page == "🔬 Control Methodology":
+    elif page == "Control Methodology":
         control_methodology_page()
 
 
@@ -319,7 +387,12 @@ def maps_page():
 
 def main_processing_page():
     """Main processing page"""
-    st.title("🏠 Hour Aggregation")
+    st.markdown("""
+    <div style="display: flex; align-items: center; margin-bottom: 1rem;">
+        <span style="font-size: 32px; margin-right: 12px;">⏰</span>
+        <h1 style="margin: 0;">Hour Aggregation</h1>
+    </div>
+    """, unsafe_allow_html=True)
     st.markdown("Process large-scale traffic monitoring datasets with configurable parameters")
     
     # Sidebar now only contains navigation - methodology moved to dedicated page
@@ -328,7 +401,12 @@ def main_processing_page():
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.header("Configuration")
+        st.markdown("""
+        <div style="display: flex; align-items: center; margin-bottom: 1rem;">
+            <span style="font-size: 24px; margin-right: 8px;">⚙️</span>
+            <h2 style="margin: 0;">Configuration</h2>
+        </div>
+        """, unsafe_allow_html=True)
         
         # File Input Section
         st.subheader("📁 File Input")
@@ -833,7 +911,12 @@ def main_processing_page():
                 del st.session_state.auto_detected_dates
         
     with col2:
-        st.header("Results")
+        st.markdown("""
+        <div style="display: flex; align-items: center; margin-bottom: 1rem;">
+            <span style="font-size: 24px; margin-right: 8px;">📊</span>
+            <h2 style="margin: 0;">Results</h2>
+        </div>
+        """, unsafe_allow_html=True)
         
         # Run Processing Button
         can_run = (uploaded_file is not None and 
@@ -841,7 +924,7 @@ def main_processing_page():
                   len(selected_hours) > 0 and
                   (not start_date or not end_date or start_date <= end_date))
         
-        if st.button("🚀 Run Processing", disabled=not can_run, use_container_width=True):
+        if st.button("🚀 Run Processing", disabled=not can_run, use_container_width=True, type="primary"):
             if can_run:
                 run_processing()
             else:
