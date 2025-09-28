@@ -1644,25 +1644,29 @@ def display_control_results():
             st.metric("Total Observations", f"{total_rows:,}")
 
     with col2:
-        if 'is_valid' in validated_df.columns:
-            # Use timestamp-based aggregation for route alternatives
-            # Group by link+timestamp and check if ANY alternative is valid
+        valid_column = None
+        if 'hausdorff_pass' in validated_df.columns:
+            valid_column = 'hausdorff_pass'
+        elif 'is_valid' in validated_df.columns:
+            valid_column = 'is_valid'
+
+        if valid_column:
+            valid_series = validated_df[valid_column].fillna(False).astype(bool)
+            total_routes = len(valid_series)
+            valid_routes = int(valid_series.sum())
+            valid_routes_pct = (valid_routes / total_routes * 100) if total_routes > 0 else 0
+            st.metric("Valid Routes", f"{valid_routes:,}", f"{valid_routes_pct:.1f}%")
+
             name_col = 'name' if 'name' in validated_df.columns else 'Name'
             timestamp_col = 'timestamp' if 'timestamp' in validated_df.columns else 'Timestamp'
 
             if name_col in validated_df.columns and timestamp_col in validated_df.columns:
-                # Group by (link, timestamp) and check if ANY alternative in each group is valid
-                observation_groups = validated_df.groupby([name_col, timestamp_col])['is_valid'].any()
+                observation_groups = valid_series.groupby([validated_df[name_col], validated_df[timestamp_col]]).any()
                 total_observations = len(observation_groups)
-                valid_observations = observation_groups.sum()
-                valid_pct = (valid_observations / total_observations * 100) if total_observations > 0 else 0
-                st.metric("Valid", f"{valid_observations:,}", f"{valid_pct:.1f}%")
-            else:
-                # Fallback to row-based counting if grouping columns not available
-                valid_count = validated_df['is_valid'].sum()
-                total_rows_for_pct = len(validated_df)
-                valid_pct = (valid_count / total_rows_for_pct * 100) if total_rows_for_pct > 0 else 0
-                st.metric("Valid Observations", f"{valid_count:,}", f"{valid_pct:.1f}%")
+                valid_observations = int(observation_groups.sum())
+                observation_pct = (valid_observations / total_observations * 100) if total_observations > 0 else 0
+        else:
+            st.metric("Valid Routes", "N/A", "0%")
 
     with col3:
         unique_links = validated_df['name'].nunique() if 'name' in validated_df.columns else validated_df['Name'].nunique() if 'Name' in validated_df.columns else 0
