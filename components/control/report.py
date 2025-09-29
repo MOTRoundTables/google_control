@@ -729,8 +729,6 @@ def write_shapefile_with_results(gdf: gpd.GeoDataFrame, output_path: str) -> Non
     """Write complete shapefile package with added transparent metrics fields."""
     tmp_dir = None
     try:
-        output_gdf = gdf.copy()
-
         # Define the exact field order to match CSV report
         desired_order = [
             'From', 'To',
@@ -758,31 +756,43 @@ def write_shapefile_with_results(gdf: gpd.GeoDataFrame, output_path: str) -> Non
         }
 
         # Only keep the desired columns from the CSV report (no extra fields)
-        available_cols = [col for col in desired_order if col in output_gdf.columns]
+        available_cols = [col for col in desired_order if col in gdf.columns]
         # Only keep geometry and the desired columns - no extra fields
         final_order = available_cols + ['geometry']
-        output_gdf = output_gdf[final_order]
+
+        # Select columns and copy only once - avoid unnecessary copy at the start
+        output_gdf = gdf[final_order].copy()
 
         # Apply column mapping for field name truncation
-        output_gdf = output_gdf.rename(columns=column_mapping)
+        output_gdf.rename(columns=column_mapping, inplace=True)
 
-        # Optimize data types for better shapefile performance
-        for col in ['perfect_p', 'thresh_p', 'failed_p', 'total_succ', 'coverage_p']:
+        # Optimize data types in a single pass - much faster
+        dtype_map = {}
+
+        float_cols = ['perfect_p', 'thresh_p', 'failed_p', 'total_succ', 'coverage_p', 'num']
+        int_cols = ['total_obs', 'success_ob', 'failed_obs', 'total_rts', 'expect_obs', 'missing_ob', 'single_obs', 'multi_obs']
+
+        for col in float_cols:
             if col in output_gdf.columns:
-                output_gdf[col] = pd.to_numeric(output_gdf[col], errors='coerce').astype('float32')
+                dtype_map[col] = 'float32'
 
-        for col in ['total_obs', 'success_ob', 'failed_obs', 'total_rts', 'expect_obs', 'missing_ob', 'single_obs', 'multi_obs']:
+        for col in int_cols:
             if col in output_gdf.columns:
-                # Use int32 for better performance and smaller file size
-                output_gdf[col] = output_gdf[col].astype('int32')
+                dtype_map[col] = 'int32'
 
-        if 'num' in output_gdf.columns:
-            output_gdf['num'] = pd.to_numeric(output_gdf['num'], errors='coerce').astype('float32')
+        # Apply all conversions at once
+        if dtype_map:
+            for col, dtype in dtype_map.items():
+                if dtype == 'float32':
+                    output_gdf[col] = pd.to_numeric(output_gdf[col], errors='coerce').astype('float32')
+                else:
+                    output_gdf[col] = output_gdf[col].astype('int32')
 
-        # Optimize geometry for writing (simplify very small details if needed)
+        # Optimize geometry for writing - vectorized approach
         if len(output_gdf) > 1000:  # Only for large shapefiles
-            # Remove any invalid geometries
-            output_gdf = output_gdf[output_gdf.geometry.is_valid]
+            # Remove any invalid geometries using vectorized operation
+            valid_mask = output_gdf.geometry.is_valid
+            output_gdf = output_gdf[valid_mask]
 
         if output_gdf.crs is None:
             output_gdf = output_gdf.set_crs('EPSG:4326')
