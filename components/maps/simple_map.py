@@ -57,7 +57,11 @@ def create_simple_map(data: gpd.GeoDataFrame,
     else:
         vmin, vmax = 0, 1
 
-    # Add features to map
+    # Pre-calculate colors for all features
+    data = data.copy()
+    data['color'] = '#999999'  # Default gray
+    data['tooltip'] = ''
+
     for idx, row in data.iterrows():
         # Get color based on value
         if value_column in row and pd.notna(row[value_column]):
@@ -78,25 +82,31 @@ def create_simple_map(data: gpd.GeoDataFrame,
                 # Yellow to red
                 r = 255
                 g = int((1 - normalized) * 2 * 255)
-            color = f'#{r:02x}{g:02x}00'
+            data.at[idx, 'color'] = f'#{r:02x}{g:02x}00'
+
+            # Create tooltip
+            link_id = row.get('Id', row.get('link_id', 'N/A'))
+            value_text = f"{row[value_column]:.1f}"
+            data.at[idx, 'tooltip'] = f"Link: {link_id}<br>{metric_name}: {value_text}"
         else:
-            color = '#999999'  # Gray for no data
+            link_id = row.get('Id', row.get('link_id', 'N/A'))
+            data.at[idx, 'tooltip'] = f"Link: {link_id}<br>{metric_name}: N/A"
 
-        # Create simple tooltip
-        link_id = row.get('Id', row.get('link_id', 'N/A'))
-        value_text = f"{row[value_column]:.1f}" if value_column in row and pd.notna(row[value_column]) else "N/A"
-        tooltip = f"Link: {link_id}<br>{metric_name}: {value_text}"
-
-        # Add line to map
-        folium.GeoJson(
-            row['geometry'],
-            style_function=lambda x, color=color: {
-                'color': color,
-                'weight': 3,
-                'opacity': 0.8
-            },
-            tooltip=tooltip
-        ).add_to(m)
+    # Add all features in one bulk operation
+    folium.GeoJson(
+        data,
+        style_function=lambda feature: {
+            'color': feature['properties']['color'],
+            'weight': 3,
+            'opacity': 0.8
+        },
+        tooltip=folium.GeoJsonTooltip(
+            fields=['tooltip'],
+            aliases=[''],
+            labels=False,
+            sticky=True
+        )
+    ).add_to(m)
 
     logger.info(f"Rendered {len(data)} features on map")
     return m
