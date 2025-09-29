@@ -56,7 +56,7 @@ streamlit run app.py
 pip install -r requirements.txt
 
 # Create directories
-mkdir -p output control_output logs
+mkdir -p output/control output/aggregation logs
 
 # Run the application
 streamlit run app.py
@@ -104,8 +104,11 @@ google_agg/
 │   └── setup/                     # Setup utilities
 │
 ├── test_data/                     # Sample datasets
-├── output/                        # Processing outputs
-├── control_output/                # Validation outputs
+│   ├── control/                   # Control test cases and scenarios
+│   └── aggregation/               # Map test data and shapefiles
+├── output/                        # All system outputs
+│   ├── control/                   # Control validation outputs (timestamped folders)
+│   └── aggregation/               # Aggregation outputs (organized by source)
 └── docs/                          # Documentation
 ```
 
@@ -132,7 +135,7 @@ The application provides three main components:
 
 **Output Files**:
 ```
-control_output/
+output/control/DD_MM_YY_HH_MM/      # Timestamped validation outputs
 ├── validated_data.csv              # All validation results
 ├── failed_observations.csv         # Combined failure analysis
 ├── missing_observations.csv        # Code 94 - temporal gaps
@@ -153,7 +156,7 @@ control_output/
 
 **Output Files**:
 ```
-output/
+output/aggregation/from_control_DD_MM_YY_HH_MM/  # Source-traced aggregation outputs
 ├── hourly_agg.csv                  # Hourly aggregated data
 ├── weekly_hourly_profile.csv       # Weekly pattern analysis
 ├── data_quality_report.csv         # Quality metrics
@@ -292,10 +295,12 @@ The system includes comprehensive test data for development and validation:
 ```
 test_data/
 ├── control/                        # Dataset Control test data
+│   ├── cases/                      # Various test scenarios and edge cases
 │   ├── original_test_data_full.csv # Small validation dataset
 │   └── data.csv                    # Large test dataset (700k+ records)
-└── google_results_to_golan_17_8_25/
-    └── *.shp                       # Reference shapefile package
+└── aggregation/                    # Map and aggregation test data
+    └── google_results_to_golan_17_8_25/
+        └── *.shp                   # Reference shapefile package
 ```
 
 ### Creating Your Own Test Data
