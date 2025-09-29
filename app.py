@@ -384,29 +384,25 @@ def maps_page():
 
 def main_processing_page():
     """Main processing page"""
-    st.markdown("""
-    <div style="display: flex; align-items: center; margin-bottom: 1rem;">
-        <span style="font-size: 32px; margin-right: 12px;">⏰</span>
-        <h1 style="margin: 0;">Data Aggregation</h1>
-    </div>
-    """, unsafe_allow_html=True)
-    st.markdown("Process large-scale traffic monitoring datasets with configurable parameters")
-    
+    st.title("⏰ Data Aggregation")
+    st.markdown("---")
+    st.markdown("### Process large-scale traffic monitoring datasets with configurable parameters")
+    st.markdown("")
+
     # Sidebar now only contains navigation - methodology moved to dedicated page
-    
+
     # Main application layout
     col1, col2 = st.columns([2, 1])
-    
+
     with col1:
         st.markdown("""
-        <div style="display: flex; align-items: center; margin-bottom: 1rem;">
-            <span style="font-size: 24px; margin-right: 8px;">⚙️</span>
-            <h2 style="margin: 0;">Configuration</h2>
+        <div style="background-color: #f0f2f6; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 5px solid #1f77b4;">
+            <h2 style="margin: 0; color: #1f77b4;">⚙️ Configuration</h2>
         </div>
         """, unsafe_allow_html=True)
-        
+
         # File Input Section
-        st.subheader("📁 File Input")
+        st.markdown("#### 📁 File Input")
         uploaded_file = st.file_uploader(
             "Upload CSV file containing Google Maps link monitoring data",
             type=['csv'],
@@ -466,7 +462,7 @@ def main_processing_page():
                     st.warning("⚠️ Could not auto-detect source folder. Will use timestamp-based folder.")
         
         # Output Directory Section
-        st.subheader("📂 Output Directory")
+        st.markdown("#### 📂 Output Directory")
         output_dir = st.text_input(
             "Output directory path",
             value="./output/aggregation",
@@ -474,7 +470,7 @@ def main_processing_page():
         )
         
         # Basic Parameters Section
-        st.subheader("⚙️ Basic Parameters")
+        st.markdown("#### ⚙️ Basic Parameters")
         
         # Chunk size for memory management
         chunk_size = st.number_input(
@@ -516,7 +512,7 @@ def main_processing_page():
         )
         
         # Timestamp and Timezone Configuration
-        st.subheader("🕐 Timestamp Configuration")
+        st.markdown("#### 🕐 Timestamp Configuration")
         
         col_tz, col_fmt = st.columns(2)
         
@@ -540,9 +536,9 @@ def main_processing_page():
         
         # Date Range Configuration
         if 'auto_detected_dates' in st.session_state:
-            st.subheader("📅 Date Range Filters ✨ Auto-detected")
+            st.markdown("#### 📅 Date Range Filters ✨ Auto-detected")
         else:
-            st.subheader("📅 Date Range Filters")
+            st.markdown("#### 📅 Date Range Filters")
         
         col_start, col_end = st.columns(2)
         
@@ -593,7 +589,7 @@ def main_processing_page():
             st.error("❌ Start date must be before or equal to end date")
         
         # Time Filters Configuration
-        st.subheader("⏰ Time Filters")
+        st.markdown("#### ⏰ Time Filters")
         
         # Weekday selection
         weekday_options = [
@@ -620,7 +616,7 @@ def main_processing_page():
         )
         
         # Advanced Configuration
-        st.subheader("🔧 Advanced Configuration")
+        st.markdown("#### 🔧 Advanced Configuration")
         
         # Day Type Mapping
         with st.expander("Day Type Mapping", expanded=False):
@@ -962,9 +958,8 @@ def main_processing_page():
         
     with col2:
         st.markdown("""
-        <div style="display: flex; align-items: center; margin-bottom: 1rem;">
-            <span style="font-size: 24px; margin-right: 8px;">📊</span>
-            <h2 style="margin: 0;">Results</h2>
+        <div style="background-color: #f0f2f6; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 5px solid #28a745;">
+            <h2 style="margin: 0; color: #28a745;">📊 Results</h2>
         </div>
         """, unsafe_allow_html=True)
         
@@ -1583,6 +1578,8 @@ def create_visualizations(hourly_df: pd.DataFrame):
 def methodology_page():
     """Methodology documentation page for hourly aggregation"""
     st.title("📚 Data Aggregation Methodology")
+    st.markdown("---")
+    st.markdown("")
 
     # Read and display the methodology from the processing component
     from pathlib import Path
@@ -1599,6 +1596,8 @@ def methodology_page():
 def control_methodology_page():
     """Control methodology page - redirects to methodology.md"""
     st.title("🔬 Dataset Control Methodology")
+    st.markdown("---")
+    st.markdown("")
 
     # Read and display the methodology from the control component
     from pathlib import Path

@@ -42,9 +42,11 @@ class MapsPageInterface:
     
     def render_maps_page(self) -> None:
         """Render the main Maps page with navigation and file controls."""
-        
-        render_title_with_icon('maps', 'Interactive Map Visualization')
-        st.markdown("Visualize traffic patterns with interactive maps showing hourly and weekly aggregation data")
+
+        st.title("🗺️ Interactive Map Visualization")
+        st.markdown("---")
+        st.markdown("### Visualize traffic patterns with interactive maps showing hourly and weekly aggregation data")
+        st.markdown("")
         
         # Initialize session state for maps
         self._initialize_session_state()
@@ -129,14 +131,18 @@ class MapsPageInterface:
     
     def _render_file_loading_section(self) -> None:
         """Render file input controls for shapefile and results loading."""
-        
-        render_header_with_icon('file_input', 'Data Loading')
-        
+
+        st.markdown("""
+        <div style="background-color: #f0f2f6; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 5px solid #6610f2;">
+            <h2 style="margin: 0; color: #6610f2;">📂 Data Loading</h2>
+        </div>
+        """, unsafe_allow_html=True)
+
         # Create two columns for file inputs
         col_shapefile, col_results = st.columns(2)
-        
+
         with col_shapefile:
-            render_subheader_with_icon('map_view', 'Network Shapefile')
+            st.markdown("#### 🗺️ Network Shapefile")
             
             # Show current shapefile status
             current_shapefile = st.session_state.maps_shapefile_path
@@ -193,7 +199,7 @@ class MapsPageInterface:
                 self._load_shapefile(uploaded_shapefile, shapefile_path_input)
         
         with col_results:
-            render_subheader_with_icon('analysis', 'Results Data')
+            st.markdown("#### 📊 Results Data")
             
             # Show current results status
             if st.session_state.maps_hourly_results is not None:

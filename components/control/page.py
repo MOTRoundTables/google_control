@@ -43,14 +43,20 @@ except ImportError:  # pragma: no cover - optional dependency
 
 def control_page():
     """Dataset Control and Reporting page"""
-    render_title_with_icon('dataset_control', 'Dataset Control and Reporting')
-    st.markdown("Validate Google Maps polyline data against reference shapefiles using geometric similarity metrics")
+    st.title("🛡️ Dataset Control and Reporting")
+    st.markdown("---")
+    st.markdown("### Validate Google Maps polyline data against reference shapefiles using geometric similarity metrics")
+    st.markdown("")
 
     # Main layout
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        st.header("Configuration")
+        st.markdown("""
+        <div style="background-color: #f0f2f6; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 5px solid #dc3545;">
+            <h2 style="margin: 0; color: #dc3545;">⚙️ Configuration</h2>
+        </div>
+        """, unsafe_allow_html=True)
 
         # Initialize session state for parameter persistence
         if 'control_params' not in st.session_state:
@@ -86,7 +92,7 @@ def control_page():
             }
 
         # File Input Section
-        render_subheader_with_icon('file_input', 'File Input')
+        st.markdown("#### 📁 File Input")
 
         # CSV file upload
         csv_file = st.file_uploader(
@@ -133,7 +139,7 @@ def control_page():
         output_dir = str(output_dir_path)
 
         # Validation Parameters Section
-        render_subheader_with_icon('validation', 'Validation Parameters')
+        st.markdown("#### 🎯 Validation Parameters")
 
         # Test Selection Section
         render_icon_text('target', 'Select Validation Tests (tested in order)')
@@ -482,7 +488,11 @@ def control_page():
             )
 
     with col2:
-        st.header("Validation")
+        st.markdown("""
+        <div style="background-color: #f0f2f6; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; border-left: 5px solid #28a745;">
+            <h2 style="margin: 0; color: #28a745;">✅ Validation</h2>
+        </div>
+        """, unsafe_allow_html=True)
 
         # Check if required files are uploaded
         can_validate = (csv_file is not None and shapefile_file is not None)
