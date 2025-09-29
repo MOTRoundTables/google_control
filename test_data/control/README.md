@@ -1,21 +1,23 @@
-# Control Test Data
+# Test Data - Control & Validation
 
-This directory contains test datasets specifically designed for validating the Dataset Control and Validation component (`components/control/`).
+This directory contains test datasets specifically designed for validating the Dataset Control and Validation component (`components/control/`). These test files validate Google Maps polyline data against reference shapefiles using geometric similarity analysis.
 
 ## Test Files Overview
 
 ### Core Test Data
-- **`data.csv`** - Main control validation test dataset with mixed validation scenarios
+- **`data.csv`** - Main control validation test dataset with mixed validation scenarios (700k+ records)
 - **`data.zip`** - Compressed version of the main test data
-- **`google_results_to_golan_17_8_25.zip`** - Reference shapefile data for geometric validation
+- **`original_test_data_full.csv`** - Complete original test dataset for validation testing
+- **Reference Shapefile**: Located in `test_data/aggregation/google_results_to_golan_17_8_25/` (shared with maps component)
 
-### Scenario-Specific Test Files
+### Test Case Files
+Located in the `cases/` subdirectory, organized by validation scenario:
 - **`test_perfect_scenario.csv`** - All observations pass validation (baseline test)
 - **`test_failed_observations.csv`** - All observations fail validation (error handling test)
-- **`test_missing_observations.csv`** - Missing data scenarios and edge cases
+- **`test_missing_observations.csv`** - Missing data scenarios and Code 94/95 analysis
 - **`test_multiple_alternatives.csv`** - Multiple route alternatives per link+timestamp
-- **`test_mixed_scenarios.csv`** - Mixed valid/invalid observations
-- **`test_edge_cases.csv`** - Boundary conditions and special cases
+- **`test_mixed_scenarios.csv`** - Mixed valid/invalid observations for comprehensive testing
+- **`test_edge_cases.csv`** - Boundary conditions and special geometric cases
 
 ### Historical Test Data
 - **`original_‏‏‏‏data_test_control_s_9054-99_s_653-656.csv`** - Original test subset for specific links
@@ -23,12 +25,28 @@ This directory contains test datasets specifically designed for validating the D
 
 ## Test Data Structure
 
-All CSV files follow the standard Google Maps monitoring format:
+### Control-Specific CSV Format
+All CSV files include the minimum required columns for control validation:
+```
+Name, Polyline, Timestamp, RouteAlternative (optional)
+```
+
+### Full Format (for comprehensive testing):
 ```
 DataID, Name, SegmentID, RouteAlternative, RequestedTime, Timestamp,
 DayInWeek, DayType, Duration (seconds), Distance (meters), Speed (km/h),
 Url, Polyline
 ```
+
+### Expected Outputs
+Control validation generates timestamped output folders in `./output/control/DD_MM_YY_HH_MM/`:
+- `validated_data.csv` - All validation results with codes and metrics
+- `failed_observations.csv` - Combined failure analysis
+- `missing_observations.csv` - Code 94/95 temporal gap analysis
+- `best_valid_observations.csv` - Best route for each link
+- `link_report.csv` - Link-level summary statistics
+- `link_report_shapefile.zip` - Complete spatial package for QGIS
+- `failed_observations_shapefile.zip` - Failed observations spatial visualization
 
 ## Validation Test Coverage
 
@@ -50,36 +68,75 @@ Tests all validation codes from the control methodology:
 - **30-34**: Multiple route alternatives scenarios
 - **90-93**: Data availability error scenarios
 
-## Usage
+## Usage Examples
 
+### Control Component Testing
+Access the control validation interface through the main application:
+```bash
+streamlit run app.py
+# Navigate to "Dataset Control & Validation" page
+# Upload test CSV file and reference shapefile
+```
+
+### Automated Testing
 These test files are used by:
 - **Control Component Tests**: `tests/control/`
 - **Integration Tests**: `tests/integration/`
-- **Manual Validation**: Through the control UI at `/control`
+- **Validation Methodology Testing**: `tests/control/test_control_validator.py`
 
 ## Test Execution
 
-Run control validation tests:
+### Automated Test Suite
 ```bash
+# Run all control validation tests
 pytest tests/control/
+
+# Run specific control test files
+pytest tests/control/test_control_validator.py
+pytest tests/control/test_control_report.py
+
+# Run with verbose output
+pytest tests/control/ -v
 ```
 
-Run with specific test data:
+### Manual Testing
 ```bash
-python -m components.control.page --test-file test_data/control/test_perfect_scenario.csv
+# Launch the application and test manually
+streamlit run app.py
+# Use test files from this directory through the web interface
 ```
 
-## Data Sources
+## Data Characteristics
 
-- **Geometric Reference**: Based on Golan Heights road network (EPSG 2039)
+### Spatial Coverage
+- **Geographic Area**: Golan Heights road network (Israel)
+- **Coordinate System**: EPSG:2039 (Israel TM Grid)
+- **Network Size**: Representative sample of ~100 road links
+- **Link Types**: Various road classifications and geometries
+
+### Data Quality
 - **Google Maps Data**: Real polyline encodings from Google Maps API
-- **Temporal Coverage**: Multi-day datasets with 15-minute intervals
-- **Link Coverage**: Representative sample of network links
+- **Temporal Coverage**: Multi-day datasets with 15-minute observation intervals
+- **Route Alternatives**: Multiple routing options per link for comprehensive testing
+- **Validation Coverage**: Tests all geometric validation scenarios (codes 0-4, 20-24, 30-34, 90-93)
 
-## Maintenance
+### Expected Performance
+- **Small Test Files**: < 5 seconds validation time
+- **Main Dataset (data.csv)**: 30-60 seconds validation time
+- **Memory Usage**: < 500MB for largest test files
+- **Output Size**: ~5-10MB per validation run
 
-- **Update Frequency**: Test data updated when validation methodology changes
-- **Version Control**: All test files tracked in Git (control branch)
-- **Quality Assurance**: Each test file validates specific control scenarios
+## Quality Assurance
 
-For detailed validation methodology, see: `components/control/methodology.md`
+- **Validation Methodology**: See `components/control/methodology.md` for technical details
+- **Test Coverage**: Each test file validates specific geometric and data quality scenarios
+- **Version Control**: All test files tracked in Git repository
+- **Update Protocol**: Test data refreshed when validation methodology changes
+
+## Troubleshooting
+
+### Common Test Issues
+1. **Reference Shapefile**: Ensure shapefile is available in `test_data/aggregation/` directory
+2. **Hebrew Encoding**: System auto-detects cp1255 encoding for Hebrew text
+3. **Memory Issues**: Use smaller test files for development, main dataset for integration testing
+4. **Validation Codes**: Check `methodology.md` for interpretation of validation result codes

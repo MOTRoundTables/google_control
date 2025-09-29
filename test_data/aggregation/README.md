@@ -1,81 +1,76 @@
-# Test Data Documentation
+# Test Data - Maps and Aggregation
 
-This directory contains sample data for testing and validating the Google Maps Link Monitoring System.
+This directory contains reference data and test files for the Maps visualization and Aggregation pipeline components.
 
 ## Directory Structure
 
 ```
-test_data/
-├── control/                        # Dataset Control & Validation test data
-│   ├── original_test_data_full.csv # Small validation dataset (985 rows)
-│   └── data.csv                    # Large test dataset (714,385 rows)
-└── google_results_to_golan_17_8_25/
-    ├── google_results_to_golan_17_8_25.shp  # Reference shapefile
-    ├── google_results_to_golan_17_8_25.shx  # Shapefile index
-    ├── google_results_to_golan_17_8_25.dbf  # Shapefile attributes
-    └── google_results_to_golan_17_8_25.prj  # Projection information
+test_data/aggregation/
+├── google_results_to_golan_17_8_25/    # Reference shapefile package for maps
+│   ├── google_results_to_golan_17_8_25.shp  # Reference shapefile geometry
+│   ├── google_results_to_golan_17_8_25.shx  # Shapefile spatial index
+│   ├── google_results_to_golan_17_8_25.dbf  # Shapefile attribute data
+│   ├── google_results_to_golan_17_8_25.prj  # Coordinate system information
+│   └── google_results_to_golan_17_8_25.qmd  # Metadata file
+├── data_test_small.csv              # Small aggregation test dataset
+└── README.md                        # This documentation file
 ```
 
 ## Dataset Descriptions
 
-### Control Validation Data
+### Aggregation Test Data
 
-#### `original_test_data_full.csv`
-- **Size**: 985 rows
-- **Purpose**: Small dataset for quick validation testing
-- **Coverage**: 3 links with multiple route alternatives
-- **Time Period**: 2025-06-29 to 2025-07-01 (3 days)
-- **Validation Results**: 574 exact matches (Hausdorff = 0), 411 failed (>5m threshold)
+#### `data_test_small.csv`
+- **Size**: Small sample dataset
+- **Purpose**: Testing aggregation pipeline functionality
+- **Coverage**: Representative traffic data for aggregation testing
+- **Time Period**: Sample time range for testing temporal aggregation
+- **Usage**: Quick testing of aggregation algorithms and output generation
 
-#### `data.csv`
-- **Size**: 714,385 rows
-- **Purpose**: Large dataset for performance and scalability testing
-- **Coverage**: 2,432 links total, with observations for subset of links
-- **Time Period**: Multi-day sample covering various traffic patterns
-- **Validation Results**: 698,223 passed Hausdorff (≤5m), 16,162 failed
-
-### Reference Shapefile
+### Maps Reference Shapefile
 
 #### `google_results_to_golan_17_8_25.*`
 - **Type**: ESRI Shapefile package
+- **Purpose**: Reference geometry for map visualization and spatial analysis
 - **Links**: 2,432 road links with From/To node IDs
-- **Geometry**: LineString features representing road segments
-- **CRS**: Automatically reprojected to EPSG:2039 during processing
-- **Join Rule**: Links matched as `s_{From}-{To}`
+- **Geometry**: LineString features representing road network segments
+- **CRS**: Automatically reprojected to EPSG:2039 during map processing
+- **Join Rule**: Links matched as `s_{From}-{To}` for aggregation data overlay
 
 ## Data Characteristics
 
-### Validation Patterns
-- **High-Quality Routes**: Most Google routes match reference geometry within 5m
-- **Route Alternatives**: Multiple route options for same origin-destination pairs
-- **Temporal Coverage**: Comprehensive timestamp coverage for completeness analysis
-- **Geometric Accuracy**: Reference geometry derived from consistent source
+### Map Visualization Features
+- **Network Coverage**: Complete road network for spatial visualization
+- **Link Attributes**: From/To node information for data joining
+- **Geometric Accuracy**: High-quality reference geometry for traffic overlay
+- **CRS Compatibility**: Proper projection handling for Israeli grid system
 
-### Known Test Scenarios
-1. **Exact Matches**: Routes with Hausdorff distance = 0.000m
-2. **Near Matches**: Routes within 1-5m of reference geometry
-3. **Failed Validation**: Routes exceeding 5m Hausdorff threshold
-4. **Missing Observations**: Gaps in temporal coverage for completeness testing
-5. **Multiple Alternatives**: Links with 2-3 route alternatives per timestamp
+### Aggregation Pipeline Features
+- **Temporal Data**: Sample traffic observations for hourly/weekly aggregation
+- **Link Coverage**: Representative set of links for testing aggregation algorithms
+- **Data Quality**: Clean test data for reliable aggregation testing
+- **Output Generation**: Suitable for testing hourly_agg.csv and weekly_profile.csv outputs
 
 ## Usage Examples
 
-### Dataset Control Testing
+### Aggregation Pipeline Testing
 ```bash
-# Quick validation test (985 rows)
-# Upload: test_data/control/original_test_data_full.csv
-# Shapefile: test_data/google_results_to_golan_17_8_25.zip
-
-# Large-scale validation (714k rows)
-# Upload: test_data/control/data.csv
-# Shapefile: test_data/google_results_to_golan_17_8_25.zip
+# Test aggregation pipeline functionality
+# Upload: test_data/aggregation/data_test_small.csv
+# Output: ./output/aggregation/[subfolder]/
 ```
 
-### Expected Results
-- **Small Dataset**: ~571 valid, ~414 failed validations
-- **Large Dataset**: ~698k valid, ~16k failed validations
-- **Missing Observations**: Minimal gaps (system correctly identifies temporal coverage)
-- **No-Data Links**: Links in shapefile but absent from CSV data
+### Maps Visualization Testing
+```bash
+# Test map visualization with reference shapefile
+# Shapefile: test_data/aggregation/google_results_to_golan_17_8_25/
+# Auto-detect: Maps component will automatically find this reference data
+```
+
+### Expected Outputs
+- **Aggregation**: hourly_agg.csv and weekly_hourly_profile.csv files
+- **Maps Integration**: Automatic loading of reference shapefile for visualization
+- **File Organization**: Clean output structure in timestamped folders
 
 ## Data Quality Notes
 
