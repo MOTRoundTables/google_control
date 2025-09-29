@@ -87,7 +87,7 @@ google_agg/
 │   │   ├── validator.py           # Geometric validation engine
 │   │   ├── report.py              # Reporting and aggregation
 │   │   └── methodology.md         # Technical documentation
-│   ├── processing/                # Data Processing Pipeline
+│   ├── aggregation/               # Data Aggregation Pipeline
 │   │   ├── pipeline.py            # Core CSV processing
 │   │   ├── quality.py             # Data quality analysis
 │   │   └── optimizer.py           # Memory optimization
@@ -145,7 +145,7 @@ output/control/DD_MM_YY_HH_MM/      # Timestamped validation outputs
 └── failed_observations_shapefile.zip # Failed observations spatial
 ```
 
-#### ⚙️ Data Processing Pipeline
+#### ⚙️ Data Aggregation Pipeline
 **Purpose**: Process large CSV datasets with quality analysis
 
 **Features**:

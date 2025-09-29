@@ -233,16 +233,16 @@ def test_maps_page_integration():
         import time
         start_time = time.time()
         
-        # Simulate some processing
+        # Simulate some aggregation
         if 'test_hourly_data' in st.session_state:
             data = st.session_state.test_hourly_data
             # Perform some calculations
             summary = data.groupby('link_id')['avg_duration_sec'].agg(['mean', 'std', 'count'])
             
         end_time = time.time()
-        processing_time = end_time - start_time
+        aggregation_time = end_time - start_time
         
-        st.success(f"✅ Performance test completed in {processing_time:.3f} seconds")
+        st.success(f"✅ Performance test completed in {aggregation_time:.3f} seconds")
         st.info(f"📊 Processed {len(summary) if 'summary' in locals() else 0} link summaries")
     
     # Integration status

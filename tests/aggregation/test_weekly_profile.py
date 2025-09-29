@@ -4,7 +4,7 @@ Simple test for weekly profile functionality
 
 import pandas as pd
 from datetime import date, datetime
-from components.processing.pipeline import create_weekly_profile, write_weekly_hourly_profile_csv
+from components.aggregation.pipeline import create_weekly_profile, write_weekly_hourly_profile_csv
 import tempfile
 import os
 

@@ -18,11 +18,11 @@ def test_navigation_logic():
     print(f"   Initial page: {session_state['current_page']}")
     
     # Test 2: Processing completion navigation
-    print("\n2. Testing processing completion navigation:")
-    # Simulate processing completion
-    session_state['processing_results'] = ({}, {}, {})  # Mock results
+    print("\n2. Testing aggregation completion navigation:")
+    # Simulate aggregation completion
+    session_state['aggregation_results'] = ({}, {}, {})  # Mock results
     session_state['current_page'] = "📊 Results"
-    print(f"   After processing: {session_state['current_page']}")
+    print(f"   After aggregation: {session_state['current_page']}")
     
     # Test 3: Back navigation
     print("\n3. Testing back navigation:")

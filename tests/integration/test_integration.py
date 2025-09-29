@@ -7,7 +7,7 @@ import pandas as pd
 import tempfile
 import os
 from datetime import datetime, date
-from components.processing.pipeline import read_csv_chunked, run_pipeline
+from components.aggregation.pipeline import read_csv_chunked, run_pipeline
 
 def create_larger_test_csv(num_rows=100):
     """Create a larger test CSV file for chunked reading"""
@@ -74,7 +74,7 @@ def test_chunked_csv_reading():
             'remove_link_timestamp_duplicates': True
         }
         
-        # Read CSV using chunked processing
+        # Read CSV using chunked aggregation
         df_processed = read_csv_chunked(csv_file, params)
         
         print(f"Original rows: {len(original_df)}")

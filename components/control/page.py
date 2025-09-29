@@ -30,7 +30,7 @@ from .report import (
     _parse_timestamp_series,
     calculate_expected_observations,
 )
-from components.processing.pipeline import resolve_hebrew_encoding
+from components.aggregation.pipeline import resolve_hebrew_encoding
 from utils.icons import render_title_with_icon, render_subheader_with_icon, render_icon_text, get_icon_for_component
 
 try:

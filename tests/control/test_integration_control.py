@@ -207,7 +207,7 @@ class TestDateFiltering:
         assert len(report_gdf) >= 1
 
     def test_no_date_filter(self):
-        """Test processing without date filtering (all data)."""
+        """Test aggregation without date filtering (all data)."""
         report_gdf = generate_link_report(
             self.multi_date_data,
             self.reference_shapefile

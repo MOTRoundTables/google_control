@@ -7,7 +7,7 @@ import pandas as pd
 import sys
 sys.path.append('.')
 
-from components.processing.pipeline import validate_csv_columns, normalize_column_names, REQUIRED_COLUMNS, COLUMN_MAPPING
+from components.aggregation.pipeline import validate_csv_columns, normalize_column_names, REQUIRED_COLUMNS, COLUMN_MAPPING
 
 def test_column_validation():
     """Test column validation with data_test_small.csv"""

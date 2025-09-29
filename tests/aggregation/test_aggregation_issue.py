@@ -7,7 +7,7 @@ import pandas as pd
 import sys
 import os
 sys.path.append('.')
-from components.processing.pipeline import run_pipeline
+from components.aggregation.pipeline import run_pipeline
 
 def test_both_files():
     """Test both original and fixed files to show the difference"""
@@ -65,7 +65,7 @@ def test_both_files():
             print(df_orig[['Timestamp']].head())
             print(f"Timestamp type: {type(df_orig['Timestamp'].iloc[0])}")
             
-            # Try processing
+            # Try aggregation
             params['input_file_path'] = original_file
             hourly_df, weekly_df, output_files = run_pipeline(params)
             
@@ -77,7 +77,7 @@ def test_both_files():
             print("Original file not found!")
             
     except Exception as e:
-        print(f"ERROR processing original file: {str(e)}")
+        print(f"ERROR aggregation original file: {str(e)}")
     
     # Test 2: Fixed file (with proper timestamps)
     print("\n2. Testing FIXED file (s_10005-91_all_true_FIXED.csv)")
@@ -92,7 +92,7 @@ def test_both_files():
             print(df_fixed[['Timestamp']].head())
             print(f"Timestamp type: {type(df_fixed['Timestamp'].iloc[0])}")
             
-            # Try processing
+            # Try aggregation
             params['input_file_path'] = fixed_file
             hourly_df, weekly_df, output_files = run_pipeline(params)
             
@@ -109,7 +109,7 @@ def test_both_files():
             print("Fixed file not found!")
             
     except Exception as e:
-        print(f"ERROR processing fixed file: {str(e)}")
+        print(f"ERROR aggregation fixed file: {str(e)}")
     
     print("\n" + "=" * 60)
     print("CONCLUSION:")

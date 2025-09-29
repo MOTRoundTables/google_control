@@ -31,7 +31,7 @@ try:
     print(f"chardet detected: {detected['encoding']} (confidence: {detected['confidence']:.2f})")
     
     # Test resolve_hebrew_encoding
-    from components.processing.pipeline import resolve_hebrew_encoding
+    from components.aggregation.pipeline import resolve_hebrew_encoding
     resolved = resolve_hebrew_encoding(raw_data, detected['encoding'])
     print(f"Resolved encoding: {resolved}")
     

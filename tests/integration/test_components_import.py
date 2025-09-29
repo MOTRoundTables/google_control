@@ -16,12 +16,12 @@ def test_control_component():
         print(f"ERROR: Control component import failed: {e}")
         return False
 
-def test_processing_component():
+def test_aggregation_component():
     """Test Processing component imports"""
     try:
-        from components.processing import run_pipeline
-        from components.processing.quality import QualityReportingInterface
-        from components.processing.optimizer import PerformanceOptimizer
+        from components.aggregation import run_pipeline
+        from components.aggregation.quality import QualityReportingInterface
+        from components.aggregation.optimizer import PerformanceOptimizer
         print("SUCCESS: Processing component imports successful")
         return True
     except ImportError as e:
@@ -46,7 +46,7 @@ def test_app_imports():
     try:
         # Test that app.py can import from components
         exec("""
-from components.processing.pipeline import run_pipeline
+from components.aggregation.pipeline import run_pipeline
 from components.maps import render_maps_page
 from components.control import control_page
 """)
@@ -62,7 +62,7 @@ if __name__ == "__main__":
     
     results = []
     results.append(test_control_component())
-    results.append(test_processing_component())
+    results.append(test_aggregation_component())
     results.append(test_maps_component())
     results.append(test_app_imports())
     

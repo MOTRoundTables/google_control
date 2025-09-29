@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-Test the actual app sorting by running the processing pipeline
+Test the actual app sorting by running the aggregation pipeline
 """
 
 import pandas as pd
 import sys
 sys.path.append('.')
 
-from components.processing.pipeline import run_pipeline
+from components.aggregation.pipeline import run_pipeline
 
 def test_app_sorting():
     """Test sorting with actual app data"""
     
     print("=== Testing App Sorting ===")
     
-    # Run the actual processing pipeline
+    # Run the actual aggregation pipeline
     config = {
         'input_file_path': 'test_data/data_test_small.csv',
         'output_dir': './test_output',
@@ -31,7 +31,7 @@ def test_app_sorting():
     }
     
     try:
-        print("Running processing pipeline...")
+        print("Running aggregation pipeline...")
         hourly_df, weekly_df, output_files = run_pipeline(config)
         
         print(f"✅ Processing completed!")

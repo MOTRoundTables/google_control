@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-Test the actual processing pipeline to identify timestamp parsing issues
+Test the actual aggregation pipeline to identify timestamp parsing issues
 """
 
 import sys
 sys.path.append('.')
 
-from components.processing.pipeline import run_pipeline
+from components.aggregation.pipeline import run_pipeline
 import tempfile
 import shutil
 import os
 
-def test_processing_pipeline():
-    """Test the full processing pipeline with data_test_small.csv"""
+def test_aggregation_pipeline():
+    """Test the full aggregation pipeline with data_test_small.csv"""
     
     input_file = 'test_data/data_test_small.csv'
     
@@ -20,7 +20,7 @@ def test_processing_pipeline():
     with tempfile.TemporaryDirectory() as temp_dir:
         output_dir = os.path.join(temp_dir, 'output')
         
-        # Configuration for processing
+        # Configuration for aggregation
         config = {
             'input_file_path': input_file,
             'output_dir': output_dir,
@@ -36,7 +36,7 @@ def test_processing_pipeline():
             'link_blacklist': []
         }
         
-        print("Testing processing pipeline with configuration:")
+        print("Testing aggregation pipeline with configuration:")
         for key, value in config.items():
             print(f"  {key}: {value}")
         
@@ -44,7 +44,7 @@ def test_processing_pipeline():
         print(f"Output directory: {output_dir}")
         
         try:
-            # Run the processing pipeline
+            # Run the aggregation pipeline
             result = run_pipeline(config)
             
             print(f"\nProcessing completed!")
@@ -66,4 +66,4 @@ def test_processing_pipeline():
             traceback.print_exc()
 
 if __name__ == "__main__":
-    test_processing_pipeline()
+    test_aggregation_pipeline()

@@ -1,11 +1,11 @@
 """
-Unit tests for processing.py column validation and normalization functions
+Unit tests for aggregation.py column validation and normalization functions
 """
 
 import pytest
 import pandas as pd
 from datetime import date, datetime
-from components.processing.pipeline import (
+from components.aggregation.pipeline import (
     validate_csv_columns, 
     normalize_column_names, 
     validate_and_normalize_columns,
@@ -196,7 +196,7 @@ class TestDataValidityDetermination:
     
     def test_determine_validity_boolean_column(self):
         """Test validity determination using boolean 'valid' column"""
-        from components.processing.pipeline import determine_data_validity
+        from components.aggregation.pipeline import determine_data_validity
         
         df = pd.DataFrame({
             'data_id': [1, 2, 3, 4],
@@ -214,7 +214,7 @@ class TestDataValidityDetermination:
     
     def test_determine_validity_valid_code_column(self):
         """Test validity determination using 'valid_code' column"""
-        from components.processing.pipeline import determine_data_validity
+        from components.aggregation.pipeline import determine_data_validity
         
         df = pd.DataFrame({
             'data_id': [1, 2, 3, 4],
@@ -233,7 +233,7 @@ class TestDataValidityDetermination:
     
     def test_determine_validity_numeric_ranges(self):
         """Test validity determination using numeric range rules"""
-        from components.processing.pipeline import determine_data_validity
+        from components.aggregation.pipeline import determine_data_validity
         
         df = pd.DataFrame({
             'data_id': [1, 2, 3, 4, 5],
@@ -260,7 +260,7 @@ class TestDataValidityDetermination:
     
     def test_remove_duplicates_data_id(self):
         """Test duplicate removal by DataID"""
-        from components.processing.pipeline import remove_duplicates
+        from components.aggregation.pipeline import remove_duplicates
         
         df = pd.DataFrame({
             'data_id': [1, 2, 1, 3, 2],  # Duplicates: 1 appears twice, 2 appears twice
@@ -279,7 +279,7 @@ class TestDataValidityDetermination:
     
     def test_remove_duplicates_link_timestamp(self):
         """Test duplicate removal by link+timestamp"""
-        from components.processing.pipeline import remove_duplicates
+        from components.aggregation.pipeline import remove_duplicates
         
         df = pd.DataFrame({
             'data_id': [1, 2, 3, 4, 5],
@@ -296,7 +296,7 @@ class TestDataValidityDetermination:
     
     def test_validate_numeric_ranges(self):
         """Test numeric range validation utility"""
-        from components.processing.pipeline import validate_numeric_ranges
+        from components.aggregation.pipeline import validate_numeric_ranges
         
         df = pd.DataFrame({
             'values': [10, 50, 100, 150, 200, None, -10]
@@ -309,7 +309,7 @@ class TestDataValidityDetermination:
     
     def test_apply_data_validation_and_cleaning_complete(self):
         """Test complete data validation and cleaning pipeline"""
-        from components.processing.pipeline import apply_data_validation_and_cleaning
+        from components.aggregation.pipeline import apply_data_validation_and_cleaning
         
         df = pd.DataFrame({
             'data_id': [1, 2, 1, 3, 4],  # Has duplicates
@@ -341,7 +341,7 @@ class TestTimestampParsing:
     
     def test_parse_timestamp_with_timezone_basic(self):
         """Test basic timestamp parsing with timezone"""
-        from components.processing.pipeline import parse_timestamp_with_timezone
+        from components.aggregation.pipeline import parse_timestamp_with_timezone
         
         timestamp_str = "2023-01-01 12:00:00"
         ts_format = "%Y-%m-%d %H:%M:%S"
@@ -355,7 +355,7 @@ class TestTimestampParsing:
     
     def test_parse_timestamp_with_timezone_invalid(self):
         """Test parsing invalid timestamp returns None"""
-        from components.processing.pipeline import parse_timestamp_with_timezone
+        from components.aggregation.pipeline import parse_timestamp_with_timezone
         
         result = parse_timestamp_with_timezone("invalid", "%Y-%m-%d %H:%M:%S", "UTC")
         assert result is None
@@ -368,7 +368,7 @@ class TestTimestampParsing:
     
     def test_parse_timestamps_vectorized_basic(self):
         """Test vectorized timestamp parsing"""
-        from components.processing.pipeline import parse_timestamps_vectorized
+        from components.aggregation.pipeline import parse_timestamps_vectorized
         
         timestamps = pd.Series([
             "2023-01-01 12:00:00",
@@ -386,7 +386,7 @@ class TestTimestampParsing:
     
     def test_parse_timestamps_vectorized_with_invalid(self):
         """Test vectorized parsing handles invalid timestamps"""
-        from components.processing.pipeline import parse_timestamps_vectorized
+        from components.aggregation.pipeline import parse_timestamps_vectorized
         
         timestamps = pd.Series([
             "2023-01-01 12:00:00",
@@ -405,7 +405,7 @@ class TestTimestampParsing:
     
     def test_validate_timezone(self):
         """Test timezone validation"""
-        from components.processing.pipeline import validate_timezone
+        from components.aggregation.pipeline import validate_timezone
         
         # Valid timezones
         assert validate_timezone("UTC") is True
@@ -418,7 +418,7 @@ class TestTimestampParsing:
     
     def test_validate_timestamp_format(self):
         """Test timestamp format validation"""
-        from components.processing.pipeline import validate_timestamp_format
+        from components.aggregation.pipeline import validate_timestamp_format
         
         # Valid format and timestamp
         assert validate_timestamp_format("%Y-%m-%d %H:%M:%S", "2023-01-01 12:00:00") is True
@@ -430,7 +430,7 @@ class TestTimestampParsing:
     
     def test_parse_timestamps_empty_series(self):
         """Test parsing empty or all-null series"""
-        from components.processing.pipeline import parse_timestamps_vectorized
+        from components.aggregation.pipeline import parse_timestamps_vectorized
         
         # Empty series
         empty_series = pd.Series([], dtype=str)
@@ -449,7 +449,7 @@ class TestTemporalEnhancements:
     
     def test_add_derived_time_columns(self):
         """Test adding derived time columns from timestamp"""
-        from components.processing.pipeline import add_derived_time_columns
+        from components.aggregation.pipeline import add_derived_time_columns
         
         # Create DataFrame with timezone-aware timestamps
         timestamps = pd.to_datetime([
@@ -479,7 +479,7 @@ class TestTemporalEnhancements:
     
     def test_add_derived_time_columns_missing_timestamp(self):
         """Test handling missing timestamp column"""
-        from components.processing.pipeline import add_derived_time_columns
+        from components.aggregation.pipeline import add_derived_time_columns
         
         df = pd.DataFrame({
             'data_id': [1, 2, 3],
@@ -494,7 +494,7 @@ class TestTemporalEnhancements:
     
     def test_add_derived_time_columns_all_nat(self):
         """Test handling all NaT timestamps"""
-        from components.processing.pipeline import add_derived_time_columns
+        from components.aggregation.pipeline import add_derived_time_columns
         
         df = pd.DataFrame({
             'data_id': [1, 2, 3],
@@ -509,7 +509,7 @@ class TestTemporalEnhancements:
     
     def test_map_hebrew_day_names(self):
         """Test mapping Hebrew day names to weekday_index"""
-        from components.processing.pipeline import map_hebrew_day_names
+        from components.aggregation.pipeline import map_hebrew_day_names
         
         df = pd.DataFrame({
             'data_id': [1, 2, 3, 4, 5, 6, 7],
@@ -525,7 +525,7 @@ class TestTemporalEnhancements:
     
     def test_map_hebrew_day_names_alternative_spellings(self):
         """Test mapping alternative Hebrew day name spellings"""
-        from components.processing.pipeline import map_hebrew_day_names
+        from components.aggregation.pipeline import map_hebrew_day_names
         
         df = pd.DataFrame({
             'data_id': [1, 2, 3, 4],
@@ -540,7 +540,7 @@ class TestTemporalEnhancements:
     
     def test_map_hebrew_day_names_with_existing_weekday_index(self):
         """Test Hebrew mapping preserves existing weekday_index where Hebrew not available"""
-        from components.processing.pipeline import map_hebrew_day_names
+        from components.aggregation.pipeline import map_hebrew_day_names
         
         df = pd.DataFrame({
             'data_id': [1, 2, 3],
@@ -556,7 +556,7 @@ class TestTemporalEnhancements:
     
     def test_map_hebrew_day_names_no_hebrew_column(self):
         """Test handling missing day_in_week column"""
-        from components.processing.pipeline import map_hebrew_day_names
+        from components.aggregation.pipeline import map_hebrew_day_names
         
         df = pd.DataFrame({
             'data_id': [1, 2, 3],
@@ -571,7 +571,7 @@ class TestTemporalEnhancements:
     
     def test_map_daytype_categories_hebrew_values(self):
         """Test mapping Hebrew DayType values to categories"""
-        from components.processing.pipeline import map_daytype_categories
+        from components.aggregation.pipeline import map_daytype_categories
         
         df = pd.DataFrame({
             'data_id': [1, 2, 3, 4, 5],
@@ -587,7 +587,7 @@ class TestTemporalEnhancements:
     
     def test_map_daytype_categories_english_values(self):
         """Test mapping English DayType values"""
-        from components.processing.pipeline import map_daytype_categories
+        from components.aggregation.pipeline import map_daytype_categories
         
         df = pd.DataFrame({
             'data_id': [1, 2, 3, 4],
@@ -603,7 +603,7 @@ class TestTemporalEnhancements:
     
     def test_map_daytype_categories_custom_mapping(self):
         """Test custom DayType mapping from parameters"""
-        from components.processing.pipeline import map_daytype_categories
+        from components.aggregation.pipeline import map_daytype_categories
         
         df = pd.DataFrame({
             'data_id': [1, 2, 3],
@@ -624,7 +624,7 @@ class TestTemporalEnhancements:
     
     def test_map_daytype_categories_infer_from_weekday_index(self):
         """Test inferring daytype from weekday_index when day_type unmapped"""
-        from components.processing.pipeline import map_daytype_categories
+        from components.aggregation.pipeline import map_daytype_categories
         
         df = pd.DataFrame({
             'data_id': [1, 2, 3, 4],
@@ -641,7 +641,7 @@ class TestTemporalEnhancements:
     
     def test_map_daytype_categories_no_day_type_column(self):
         """Test inferring daytype from weekday_index when no day_type column"""
-        from components.processing.pipeline import map_daytype_categories
+        from components.aggregation.pipeline import map_daytype_categories
         
         df = pd.DataFrame({
             'data_id': [1, 2, 3, 4],
@@ -657,7 +657,7 @@ class TestTemporalEnhancements:
     
     def test_map_daytype_categories_no_columns(self):
         """Test handling when neither day_type nor weekday_index available"""
-        from components.processing.pipeline import map_daytype_categories
+        from components.aggregation.pipeline import map_daytype_categories
         
         df = pd.DataFrame({
             'data_id': [1, 2, 3],
@@ -672,7 +672,7 @@ class TestTemporalEnhancements:
     
     def test_apply_temporal_enhancements_complete(self):
         """Test complete temporal enhancements pipeline"""
-        from components.processing.pipeline import apply_temporal_enhancements
+        from components.aggregation.pipeline import apply_temporal_enhancements
         
         # Create test data with timestamps and Hebrew columns
         timestamps = pd.to_datetime([
@@ -707,7 +707,7 @@ class TestTemporalEnhancements:
     
     def test_apply_temporal_enhancements_empty_dataframe(self):
         """Test temporal enhancements with empty DataFrame"""
-        from components.processing.pipeline import apply_temporal_enhancements
+        from components.aggregation.pipeline import apply_temporal_enhancements
         
         df = pd.DataFrame()
         params = {}
@@ -723,7 +723,7 @@ class TestHolidayClassification:
     
     def test_load_israeli_holidays(self):
         """Test loading Israeli holidays for a year range"""
-        from components.processing.pipeline import load_israeli_holidays
+        from components.aggregation.pipeline import load_israeli_holidays
         
         # Test loading holidays for 2023
         holidays_dict = load_israeli_holidays((2023, 2023))
@@ -739,7 +739,7 @@ class TestHolidayClassification:
     
     def test_load_israeli_holidays_multiple_years(self):
         """Test loading Israeli holidays for multiple years"""
-        from components.processing.pipeline import load_israeli_holidays
+        from components.aggregation.pipeline import load_israeli_holidays
         
         holidays_dict = load_israeli_holidays((2022, 2023))
         
@@ -752,7 +752,7 @@ class TestHolidayClassification:
     
     def test_load_custom_holidays_from_text(self, tmp_path):
         """Test loading custom holidays from text file"""
-        from components.processing.pipeline import load_custom_holidays_from_text
+        from components.aggregation.pipeline import load_custom_holidays_from_text
         
         # Create temporary text file with holidays
         holidays_file = tmp_path / "custom_holidays.txt"
@@ -780,7 +780,7 @@ class TestHolidayClassification:
     
     def test_load_custom_holidays_from_text_invalid_dates(self, tmp_path):
         """Test handling invalid dates in text file"""
-        from components.processing.pipeline import load_custom_holidays_from_text
+        from components.aggregation.pipeline import load_custom_holidays_from_text
         
         holidays_file = tmp_path / "invalid_holidays.txt"
         holidays_content = """2023-01-15 - Valid Holiday
@@ -800,7 +800,7 @@ invalid-date - Should be skipped
     
     def test_load_custom_holidays_from_text_file_not_found(self):
         """Test handling missing text file"""
-        from components.processing.pipeline import load_custom_holidays_from_text
+        from components.aggregation.pipeline import load_custom_holidays_from_text
         
         holidays_dict = load_custom_holidays_from_text("nonexistent_file.txt")
         
@@ -808,7 +808,7 @@ invalid-date - Should be skipped
     
     def test_load_custom_holidays_from_ics(self, tmp_path):
         """Test loading custom holidays from ICS file"""
-        from components.processing.pipeline import load_custom_holidays_from_ics
+        from components.aggregation.pipeline import load_custom_holidays_from_ics
         
         # Create temporary ICS file
         ics_file = tmp_path / "custom_holidays.ics"
@@ -844,7 +844,7 @@ END:VCALENDAR
     
     def test_load_custom_holidays_from_ics_file_not_found(self):
         """Test handling missing ICS file"""
-        from components.processing.pipeline import load_custom_holidays_from_ics
+        from components.aggregation.pipeline import load_custom_holidays_from_ics
         
         holidays_dict = load_custom_holidays_from_ics("nonexistent_file.ics")
         
@@ -852,7 +852,7 @@ END:VCALENDAR
     
     def test_build_holiday_calendar_israeli_only(self):
         """Test building holiday calendar with Israeli holidays only"""
-        from components.processing.pipeline import build_holiday_calendar
+        from components.aggregation.pipeline import build_holiday_calendar
         
         df = pd.DataFrame({
             'date': [date(2023, 1, 1), date(2023, 6, 15), date(2023, 12, 31)]
@@ -873,7 +873,7 @@ END:VCALENDAR
     
     def test_build_holiday_calendar_with_custom_text(self, tmp_path):
         """Test building holiday calendar with custom text file"""
-        from components.processing.pipeline import build_holiday_calendar
+        from components.aggregation.pipeline import build_holiday_calendar
         
         # Create custom holidays file
         holidays_file = tmp_path / "custom.txt"
@@ -896,7 +896,7 @@ END:VCALENDAR
     
     def test_build_holiday_calendar_with_custom_ics(self, tmp_path):
         """Test building holiday calendar with custom ICS file"""
-        from components.processing.pipeline import build_holiday_calendar
+        from components.aggregation.pipeline import build_holiday_calendar
         
         # Create custom ICS file
         ics_file = tmp_path / "custom.ics"
@@ -924,7 +924,7 @@ END:VCALENDAR
     
     def test_build_holiday_calendar_no_date_column(self):
         """Test building holiday calendar when no date column exists"""
-        from components.processing.pipeline import build_holiday_calendar
+        from components.aggregation.pipeline import build_holiday_calendar
         
         df = pd.DataFrame({
             'data_id': [1, 2, 3]
@@ -941,7 +941,7 @@ END:VCALENDAR
     
     def test_classify_holidays_basic(self):
         """Test basic holiday classification"""
-        from components.processing.pipeline import classify_holidays, build_holiday_calendar
+        from components.aggregation.pipeline import classify_holidays, build_holiday_calendar
         
         # Create test data with some dates that are holidays
         df = pd.DataFrame({
@@ -975,7 +975,7 @@ END:VCALENDAR
     
     def test_classify_holidays_as_weekend(self):
         """Test classifying holidays as weekend"""
-        from components.processing.pipeline import classify_holidays
+        from components.aggregation.pipeline import classify_holidays
         
         df = pd.DataFrame({
             'data_id': [1, 2],
@@ -996,7 +996,7 @@ END:VCALENDAR
     
     def test_classify_holidays_disabled(self):
         """Test holiday classification when disabled"""
-        from components.processing.pipeline import classify_holidays
+        from components.aggregation.pipeline import classify_holidays
         
         df = pd.DataFrame({
             'data_id': [1, 2],
@@ -1018,7 +1018,7 @@ END:VCALENDAR
     
     def test_classify_holidays_no_date_column(self):
         """Test holiday classification with missing date column"""
-        from components.processing.pipeline import classify_holidays
+        from components.aggregation.pipeline import classify_holidays
         
         df = pd.DataFrame({
             'data_id': [1, 2, 3],
@@ -1034,7 +1034,7 @@ END:VCALENDAR
     
     def test_classify_holidays_empty_dataframe(self):
         """Test holiday classification with empty DataFrame"""
-        from components.processing.pipeline import classify_holidays
+        from components.aggregation.pipeline import classify_holidays
         
         df = pd.DataFrame()
         params = {'use_israeli_holidays': True}
@@ -1045,7 +1045,7 @@ END:VCALENDAR
     
     def test_apply_temporal_enhancements_with_holidays(self):
         """Test temporal enhancements including holiday classification"""
-        from components.processing.pipeline import apply_temporal_enhancements
+        from components.aggregation.pipeline import apply_temporal_enhancements
         
         # Create test data
         timestamps = pd.to_datetime([
@@ -1082,7 +1082,7 @@ END:VCALENDAR
     
     def test_apply_temporal_enhancements_holidays_disabled(self):
         """Test temporal enhancements with holiday classification disabled"""
-        from components.processing.pipeline import apply_temporal_enhancements
+        from components.aggregation.pipeline import apply_temporal_enhancements
         
         timestamps = pd.to_datetime(["2023-01-01 12:00:00"]).tz_localize('UTC')
         

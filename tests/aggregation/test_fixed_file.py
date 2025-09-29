@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Test the fixed file with the processing pipeline
+Test the fixed file with the aggregation pipeline
 """
 
 import pandas as pd
 import sys
 sys.path.append('.')
 
-from components.processing.pipeline import run_pipeline
+from components.aggregation.pipeline import run_pipeline
 
 def test_fixed_file():
     """Test the fixed file"""

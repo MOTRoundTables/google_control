@@ -74,7 +74,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
                         print(f"  Result: INVALID (> 5m)")
                     
                 except Exception as e:
-                    print(f"  Error processing alternative {alt}: {e}")
+                    print(f"  Error aggregation alternative {alt}: {e}")
                     
         else:
             print(f"NO MATCH found in shapefile for {link_name}")

@@ -4,7 +4,7 @@ Test weekly profile with weekday_index grouping
 
 import pandas as pd
 from datetime import date
-from components.processing.pipeline import create_weekly_profile
+from components.aggregation.pipeline import create_weekly_profile
 
 def test_weekly_profile_weekday_grouping():
     """Test weekly profile creation with weekday_index grouping"""

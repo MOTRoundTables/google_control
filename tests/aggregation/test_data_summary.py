@@ -49,7 +49,7 @@ if __name__ == "__main__":
         try:
             show_summary(file)
         except Exception as e:
-            print(f"Error processing {file}: {e}")
+            print(f"Error aggregation {file}: {e}")
     
     print("\n" + "="*60)
     print("✅ Test data is ready for comprehensive testing!")

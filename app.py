@@ -16,7 +16,7 @@ from datetime import datetime, date
 from typing import Dict, List, Optional
 
 # Import processing functions
-from components.processing.pipeline import run_pipeline, resolve_hebrew_encoding
+from components.aggregation.pipeline import run_pipeline, resolve_hebrew_encoding
 
 # Import maps page
 from components.maps import render_maps_page
@@ -276,10 +276,10 @@ def main():
     # Define pages with professional icons using Unicode symbols
     page_configs = [
         ("Dataset Control", "🛡️", "Dataset Control"),
-        ("Hour Aggregation", "⏰", "Hour Aggregation"),
+        ("Aggregation", "⏰", "Aggregation"),
         ("Aggregated Maps", "🗺️", "Aggregated Maps"),
         ("Control Methodology", "🔬", "Control Methodology"),
-        ("Hour Aggregation Methodology", "📚", "Hour Aggregation Methodology")
+        ("Aggregation Methodology", "📚", "Aggregation Methodology")
     ]
 
     # Try professional option menu first
@@ -358,13 +358,13 @@ def main():
     # Use the current page from session state (not the selected page) to avoid conflicts
     page = st.session_state.current_page
 
-    if page == "Hour Aggregation":
+    if page == "Aggregation":
         main_processing_page()
     elif page == "Aggregated Maps":
         maps_page()
     elif page == "Dataset Control":
         control_page()
-    elif page == "Hour Aggregation Methodology":
+    elif page == "Aggregation Methodology":
         methodology_page()
     elif page == "Control Methodology":
         control_methodology_page()
@@ -387,7 +387,7 @@ def main_processing_page():
     st.markdown("""
     <div style="display: flex; align-items: center; margin-bottom: 1rem;">
         <span style="font-size: 32px; margin-right: 12px;">⏰</span>
-        <h1 style="margin: 0;">Hour Aggregation</h1>
+        <h1 style="margin: 0;">Data Aggregation</h1>
     </div>
     """, unsafe_allow_html=True)
     st.markdown("Process large-scale traffic monitoring datasets with configurable parameters")
@@ -818,7 +818,7 @@ def main_processing_page():
             try:
                 # Read sample to validate columns and detect date range
                 # First detect encoding, then read with proper encoding
-                from components.processing.pipeline import detect_file_encoding
+                from components.aggregation.pipeline import detect_file_encoding
                 
                 # Save uploaded file temporarily to detect encoding
                 temp_file_path = save_uploaded_file(uploaded_file)
@@ -831,7 +831,7 @@ def main_processing_page():
                     # Reset file pointer for later use
                     uploaded_file.seek(0)
                 # Use the proper validation function from processing.py
-                from components.processing.pipeline import validate_csv_columns
+                from components.aggregation.pipeline import validate_csv_columns
                 is_valid, missing_columns = validate_csv_columns(sample_df)
                 
                 if not is_valid:
@@ -1298,7 +1298,7 @@ def get_parsed_input_sample(uploaded_file, params: dict) -> pd.DataFrame:
         # Save uploaded file temporarily to detect encoding
         temp_file_path = save_uploaded_file(uploaded_file)
         try:
-            from components.processing.pipeline import detect_file_encoding
+            from components.aggregation.pipeline import detect_file_encoding
             detected_encoding = detect_file_encoding(temp_file_path)
             sample_df = pd.read_csv(temp_file_path, nrows=100, encoding=detected_encoding)
         finally:
@@ -1306,7 +1306,7 @@ def get_parsed_input_sample(uploaded_file, params: dict) -> pd.DataFrame:
             Path(temp_file_path).unlink(missing_ok=True)
         
         # Apply basic column normalization like the processing pipeline does
-        from components.processing.pipeline import normalize_column_names, validate_csv_columns
+        from components.aggregation.pipeline import normalize_column_names, validate_csv_columns
         
         # Validate columns
         is_valid, missing_cols = validate_csv_columns(sample_df)
@@ -1582,18 +1582,18 @@ def create_visualizations(hourly_df: pd.DataFrame):
 
 def methodology_page():
     """Methodology documentation page for hourly aggregation"""
-    st.title("📚 Hour Aggregation Methodology")
+    st.title("📚 Data Aggregation Methodology")
 
     # Read and display the methodology from the processing component
     from pathlib import Path
-    methodology_path = Path("components/processing/methodology.md")
+    methodology_path = Path("components/aggregation/methodology.md")
     if methodology_path.exists():
         with open(methodology_path, "r", encoding="utf-8") as f:
             st.markdown(f.read())
     else:
         # Fallback content if file not found
-        st.error("Methodology documentation file not found at components/processing/methodology.md")
-        st.info("Please ensure the methodology.md file exists in the components/processing/ directory.")
+        st.error("Methodology documentation file not found at components/aggregation/methodology.md")
+        st.info("Please ensure the methodology.md file exists in the components/aggregation/ directory.")
 
 
 def control_methodology_page():

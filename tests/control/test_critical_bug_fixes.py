@@ -57,7 +57,7 @@ try:
         else:
             print(f"ERROR: Expected valid_code={ValidCode.REQUIRED_FIELDS_MISSING}, got {null_row['valid_code']}")
     else:
-        print("ERROR: Null timestamp row was dropped during processing!")
+        print("ERROR: Null timestamp row was dropped during aggregation!")
 
 except Exception as e:
     print(f"ERROR: Validation failed: {e}")
@@ -77,9 +77,9 @@ print("SUCCESS: CSV loading None check implemented")
 print("\n=== BUG TEST 3: Large CSV Processing ===")
 
 # Test that we process all chunks, not just the first one
-print("Large CSV processing fix implemented:")
+print("Large CSV aggregation fix implemented:")
 print("- Changed from next(csv_df) to process all chunks")
-print("- Added progress bar for large file processing")
+print("- Added progress bar for large file aggregation")
 print("- Both primary and fallback encoding paths fixed")
 print("- pd.concat() combines all chunks properly")
 print("SUCCESS: Large CSV truncation bug fixed")

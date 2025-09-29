@@ -10,13 +10,13 @@ import tempfile
 import json
 from pathlib import Path
 
-from components.processing.pipeline import (
+from components.aggregation.pipeline import (
     generate_quality_by_link_report,
     generate_invalid_reason_counts_report,
     write_quality_reports,
-    generate_processing_log,
+    generate_aggregation_log,
     save_run_configuration,
-    write_processing_log_and_config
+    write_aggregation_log_and_config
 )
 
 
@@ -126,12 +126,12 @@ def test_generate_invalid_reason_counts_report_empty():
     assert list(reason_counts_df.columns) == ['invalid_reason', 'count']
 
 
-def test_generate_processing_log(sample_raw_data, sample_hourly_data, sample_weekly_data, sample_validation_stats):
-    """Test processing log generation"""
+def test_generate_aggregation_log(sample_raw_data, sample_hourly_data, sample_weekly_data, sample_validation_stats):
+    """Test aggregation log generation"""
     start_time = datetime(2024, 1, 1, 10, 0, 0)
     end_time = datetime(2024, 1, 1, 10, 5, 30)
     
-    log_content = generate_processing_log(
+    log_content = generate_aggregation_log(
         sample_raw_data, sample_hourly_data, sample_weekly_data,
         sample_validation_stats, start_time, end_time
     )
@@ -204,8 +204,8 @@ def test_write_quality_reports(sample_raw_data, sample_hourly_data, sample_valid
         assert len(reason_counts_df) == 2  # 2 invalid reasons
 
 
-def test_write_processing_log_and_config(sample_raw_data, sample_hourly_data, sample_weekly_data, sample_validation_stats):
-    """Test writing processing log and configuration files"""
+def test_write_aggregation_log_and_config(sample_raw_data, sample_hourly_data, sample_weekly_data, sample_validation_stats):
+    """Test writing aggregation log and configuration files"""
     params = {
         'chunk_size': 10000,
         'ts_format': '%Y-%m-%d %H:%M:%S',
@@ -216,16 +216,16 @@ def test_write_processing_log_and_config(sample_raw_data, sample_hourly_data, sa
     end_time = datetime(2024, 1, 1, 10, 5, 30)
     
     with tempfile.TemporaryDirectory() as temp_dir:
-        output_files = write_processing_log_and_config(
+        output_files = write_aggregation_log_and_config(
             sample_raw_data, sample_hourly_data, sample_weekly_data,
             sample_validation_stats, params, start_time, end_time, temp_dir
         )
         
-        assert 'processing_log' in output_files
+        assert 'aggregation_log' in output_files
         assert 'run_config' in output_files
         
-        # Check processing log file
-        log_path = Path(output_files['processing_log'])
+        # Check aggregation log file
+        log_path = Path(output_files['aggregation_log'])
         assert log_path.exists()
         
         with open(log_path, 'r') as f:
@@ -254,10 +254,10 @@ def test_empty_dataframes():
     quality_df = generate_quality_by_link_report(empty_df, empty_df)
     assert quality_df.empty
     
-    # Test processing log with empty data
+    # Test aggregation log with empty data
     start_time = datetime.now()
     end_time = datetime.now()
-    log_content = generate_processing_log(empty_df, empty_df, empty_df, validation_stats, start_time, end_time)
+    log_content = generate_aggregation_log(empty_df, empty_df, empty_df, validation_stats, start_time, end_time)
     
     assert isinstance(log_content, str)
     assert "Raw data rows processed: 0" in log_content

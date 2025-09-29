@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """
-Integration test for quality reporting with existing processing functions
+Integration test for quality reporting with existing aggregation functions
 """
 
 import pandas as pd
 import tempfile
 import os
 from datetime import datetime, date
-from components.processing.pipeline import (
+from components.aggregation.pipeline import (
     validate_and_normalize_columns,
     apply_data_validation_and_cleaning,
     apply_temporal_enhancements,
     create_hourly_aggregation,
     write_quality_reports,
-    write_processing_log_and_config
+    write_aggregation_log_and_config
 )
 
 def create_test_data():
-    """Create test data that mimics real CSV processing"""
+    """Create test data that mimics real CSV aggregation"""
     # Create raw CSV-like data
     raw_data = {
         'DataID': ['ID001', 'ID002', 'ID003', 'ID004', 'ID005', 'ID006'],
@@ -41,8 +41,8 @@ def create_test_data():
     return pd.DataFrame(raw_data)
 
 def test_quality_reporting_integration():
-    """Test quality reporting integration with processing pipeline"""
-    print("Testing quality reporting integration with processing pipeline...")
+    """Test quality reporting integration with aggregation pipeline"""
+    print("Testing quality reporting integration with aggregation pipeline...")
     
     # Create test data
     raw_df = create_test_data()
@@ -68,9 +68,9 @@ def test_quality_reporting_integration():
         
         # Step 2: Apply data validation and cleaning
         print("Step 2: Applying data validation and cleaning...")
-        df_cleaned, processing_stats = apply_data_validation_and_cleaning(df_normalized, params)
+        df_cleaned, aggregation_stats = apply_data_validation_and_cleaning(df_normalized, params)
         print(f"Cleaned data: {len(df_cleaned)} rows")
-        print(f"Validation stats: {processing_stats['validation_stats']}")
+        print(f"Validation stats: {aggregation_stats['validation_stats']}")
         
         # Step 3: Apply temporal enhancements
         print("Step 3: Applying temporal enhancements...")
@@ -89,17 +89,17 @@ def test_quality_reporting_integration():
         with tempfile.TemporaryDirectory() as temp_dir:
             # Write quality reports
             quality_files = write_quality_reports(
-                df_enhanced, hourly_df, processing_stats['validation_stats'], temp_dir
+                df_enhanced, hourly_df, aggregation_stats['validation_stats'], temp_dir
             )
             print(f"Generated quality files: {list(quality_files.keys())}")
             
-            # Write processing log and config
+            # Write aggregation log and config
             start_time = datetime(2024, 1, 1, 10, 0, 0)
             end_time = datetime(2024, 1, 1, 10, 1, 30)
             
-            log_files = write_processing_log_and_config(
+            log_files = write_aggregation_log_and_config(
                 df_enhanced, hourly_df, pd.DataFrame(),  # Empty weekly for now
-                processing_stats['validation_stats'], params, 
+                aggregation_stats['validation_stats'], params, 
                 start_time, end_time, temp_dir
             )
             print(f"Generated log files: {list(log_files.keys())}")
@@ -120,7 +120,7 @@ def test_quality_reporting_integration():
                         reasons_df = pd.read_csv(file_path)
                         print(f"    Invalid reasons report has {len(reasons_df)} reasons")
                         
-                    elif file_type == 'processing_log':
+                    elif file_type == 'aggregation_log':
                         with open(file_path, 'r') as f:
                             log_content = f.read()
                         print(f"    Processing log has {len(log_content)} characters")
@@ -167,7 +167,7 @@ def test_quality_metrics_accuracy():
     })
     
     # Import the quality function
-    from components.processing.pipeline import generate_quality_by_link_report
+    from components.aggregation.pipeline import generate_quality_by_link_report
     
     quality_df = generate_quality_by_link_report(test_data, hourly_data)
     

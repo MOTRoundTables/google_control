@@ -63,7 +63,7 @@ for link_name, polyline in test_cases:
             print("❌ FAILS Hausdorff test (> 5m)")
             
     except Exception as e:
-        print(f"❌ Error processing: {e}")
+        print(f"❌ Error aggregation: {e}")
         import traceback
         traceback.print_exc()
 

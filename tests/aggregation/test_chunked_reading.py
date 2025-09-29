@@ -6,7 +6,7 @@ Simple test script for chunked CSV reading functionality
 import pandas as pd
 import tempfile
 import os
-from components.processing.pipeline import (
+from components.aggregation.pipeline import (
     detect_csv_format,
     configure_chunk_size,
     optimize_dtypes,

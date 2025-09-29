@@ -171,7 +171,7 @@ def main():
     print()
     print("Test Summary:")
     print("SUCCESS: New configuration-based validation system implemented")
-    print("SUCCESS: Route alternative batch processing working")
+    print("SUCCESS: Route alternative batch aggregation working")
     print("SUCCESS: Individual results per alternative")
     print("SUCCESS: Configuration codes match UI checkboxes")
 

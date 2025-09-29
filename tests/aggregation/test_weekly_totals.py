@@ -7,7 +7,7 @@ import pandas as pd
 import sys
 import os
 sys.path.append('.')
-from components.processing.pipeline import run_pipeline
+from components.aggregation.pipeline import run_pipeline
 
 def test_weekly_totals():
     """Test the new total fields in weekly profile"""
@@ -51,7 +51,7 @@ def test_weekly_totals():
     print("=" * 60)
     
     try:
-        # Run processing
+        # Run aggregation
         hourly_df, weekly_df, output_files = run_pipeline(params)
         
         if weekly_df is not None and len(weekly_df) > 0:

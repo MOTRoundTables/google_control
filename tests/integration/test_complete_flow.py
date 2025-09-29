@@ -7,7 +7,7 @@ import pandas as pd
 import sys
 sys.path.append('.')
 
-from components.processing.pipeline import validate_csv_columns
+from components.aggregation.pipeline import validate_csv_columns
 
 def test_complete_flow():
     """Test the complete flow with data_test_small.csv"""

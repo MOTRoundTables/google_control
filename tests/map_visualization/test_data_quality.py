@@ -528,7 +528,7 @@ class TestQualityReportingInterface:
     def test_quality_filter_controls_structure(self, reporting_interface, sample_quality_report):
         """Test quality filter controls structure (without Streamlit rendering)."""
         # This test focuses on the logic rather than Streamlit rendering
-        # We can test the data processing parts
+        # We can test the data aggregation parts
         
         # Test filter settings logic
         obs_validation = sample_quality_report.get('observation_validation', {})

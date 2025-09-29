@@ -25,7 +25,7 @@ def test_navigation_fix():
         print(f"   Session state updated: {session_state['current_page']}")
         print("   ✅ Single click should work!")
     
-    # Test 2: Programmatic navigation (auto-navigation after processing)
+    # Test 2: Programmatic navigation (auto-navigation after aggregation)
     print("\n2. Testing programmatic navigation:")
     session_state['current_page'] = "📊 Results"
     print(f"   Programmatically set to: {session_state['current_page']}")

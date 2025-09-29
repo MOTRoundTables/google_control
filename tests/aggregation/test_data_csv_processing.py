@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Test processing of the large data.csv file with all valid rows
+Test aggregation of the large data.csv file with all valid rows
 """
 
 import pandas as pd
 import sys
 import os
 sys.path.append('.')
-from components.processing.pipeline import run_pipeline
+from components.aggregation.pipeline import run_pipeline
 
-def test_data_csv_processing():
-    """Test processing the large data.csv file"""
+def test_data_csv_aggregation():
+    """Test aggregation the large data.csv file"""
     
     # Test parameters
     params = {
@@ -54,8 +54,8 @@ def test_data_csv_processing():
     print(f"Processing with chunk_size: {params['chunk_size']:,}")
     
     try:
-        # Run processing
-        print(f"\n🚀 Starting processing...")
+        # Run aggregation
+        print(f"\n🚀 Starting aggregation...")
         hourly_df, weekly_df, output_files = run_pipeline(params)
         
         print(f"\n" + "=" * 50)
@@ -128,9 +128,9 @@ def test_data_csv_processing():
         print("complete transparency into the data behind each average.")
         
     except Exception as e:
-        print(f"\n❌ ERROR during processing: {str(e)}")
+        print(f"\n❌ ERROR during aggregation: {str(e)}")
         import traceback
         traceback.print_exc()
 
 if __name__ == "__main__":
-    test_data_csv_processing()
+    test_data_csv_aggregation()

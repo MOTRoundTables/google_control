@@ -332,7 +332,7 @@ def main():
         print("\n📋 MAPS PAGE IS NOW READY:")
         print("1. The AttributeError has been resolved")
         print("2. All map interfaces work correctly")
-        print("3. Data processing functionality is complete")
+        print("3. Data aggregation functionality is complete")
         print("4. Session state management is working")
         print("5. Real data integration is ready")
         print("\n🚀 You can now run: streamlit run app.py")

@@ -2,9 +2,9 @@ from pathlib import Path
 import sys
 
 BASE_DIR = Path(__file__).resolve().parent
-PIPELINE_DIR = BASE_DIR / 'components' / 'processing'
+PIPELINE_DIR = BASE_DIR / 'components' / 'aggregation'
 
-# Add repository root and processing component directory to import path
+# Add repository root and aggregation component directory to import path
 sys.path.append(str(BASE_DIR))
 sys.path.append(str(PIPELINE_DIR))
 

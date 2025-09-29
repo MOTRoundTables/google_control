@@ -18,7 +18,7 @@ from .controls import InteractiveControls
 from .map_renderer import MapVisualizationRenderer
 from .map_data import MapDataProcessor
 from .symbology import SymbologyEngine
-from components.processing.optimizer import PerformanceOptimizer
+from components.aggregation.optimizer import PerformanceOptimizer
 
 logger = logging.getLogger(__name__)
 

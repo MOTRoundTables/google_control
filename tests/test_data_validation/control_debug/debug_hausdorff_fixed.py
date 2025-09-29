@@ -71,7 +71,7 @@ try:
         print(f"Threshold {threshold:4.1f}m: {'PASS' if passes else 'FAIL'}")
         
 except Exception as e:
-    print(f"Error processing: {e}")
+    print(f"Error aggregation: {e}")
 
 print("\nCONCLUSION:")
 print("If distance is very small, validation is working correctly.")

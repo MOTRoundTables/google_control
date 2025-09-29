@@ -9,13 +9,13 @@ import tempfile
 import json
 from pathlib import Path
 
-from components.processing.pipeline import (
+from components.aggregation.pipeline import (
     generate_quality_by_link_report,
     generate_invalid_reason_counts_report,
     write_quality_reports,
-    generate_processing_log,
+    generate_aggregation_log,
     save_run_configuration,
-    write_processing_log_and_config
+    write_aggregation_log_and_config
 )
 
 
@@ -109,19 +109,19 @@ def test_invalid_reason_counts_report():
     print("✓ Invalid reason counts report test passed\n")
 
 
-def test_processing_log():
-    """Test processing log generation"""
-    print("Testing processing log generation...")
+def test_aggregation_log():
+    """Test aggregation log generation"""
+    print("Testing aggregation log generation...")
     
     raw_df, hourly_df, weekly_df, validation_stats = create_sample_data()
     start_time = datetime(2024, 1, 1, 10, 0, 0)
     end_time = datetime(2024, 1, 1, 10, 5, 30)
     
-    log_content = generate_processing_log(
+    log_content = generate_aggregation_log(
         raw_df, hourly_df, weekly_df, validation_stats, start_time, end_time
     )
     
-    print("Generated processing log:")
+    print("Generated aggregation log:")
     print("=" * 50)
     print(log_content[:500] + "..." if len(log_content) > 500 else log_content)
     print("=" * 50)
@@ -213,7 +213,7 @@ def test_complete_logging_and_config():
     end_time = datetime(2024, 1, 1, 10, 5, 30)
     
     with tempfile.TemporaryDirectory() as temp_dir:
-        output_files = write_processing_log_and_config(
+        output_files = write_aggregation_log_and_config(
             raw_df, hourly_df, weekly_df, validation_stats, 
             params, start_time, end_time, temp_dir
         )
@@ -221,7 +221,7 @@ def test_complete_logging_and_config():
         print(f"Generated output files: {list(output_files.keys())}")
         
         # Basic validation
-        assert 'processing_log' in output_files, "Should generate processing log"
+        assert 'aggregation_log' in output_files, "Should generate aggregation log"
         assert 'run_config' in output_files, "Should generate run config"
         
         # Check files exist
@@ -239,7 +239,7 @@ def main():
     try:
         test_quality_by_link_report()
         test_invalid_reason_counts_report()
-        test_processing_log()
+        test_aggregation_log()
         test_run_configuration()
         test_write_quality_reports()
         test_complete_logging_and_config()

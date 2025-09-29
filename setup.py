@@ -205,7 +205,7 @@ def run_basic_test():
 
         # Test component imports
         from components.control.page import control_page
-        from components.processing.pipeline import run_pipeline
+        from components.aggregation.pipeline import run_pipeline
         from components.maps.maps_page import render_maps_page
         print("   SUCCESS: Application components")
 

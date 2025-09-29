@@ -1,7 +1,7 @@
 """
 Tests for Map B (Weekly View) implementation.
 
-This module tests the weekly map interface, aggregation processing, 
+This module tests the weekly map interface, aggregation aggregation, 
 and interactions for the interactive map visualization feature.
 """
 
@@ -394,8 +394,8 @@ class TestWeeklyMapAggregation:
         
         return pd.DataFrame(data)
     
-    def test_weekly_aggregation_processing(self, weekly_interface, multi_day_hourly_data):
-        """Test weekly aggregation processing with filters."""
+    def test_weekly_aggregation_aggregation(self, weekly_interface, multi_day_hourly_data):
+        """Test weekly aggregation aggregation with filters."""
         # Mock shapefile data
         from shapely.geometry import LineString
         shapefile_data = gpd.GeoDataFrame({

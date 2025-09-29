@@ -1,5 +1,5 @@
 """
-Tests for map data processing components.
+Tests for map data aggregation components.
 
 This module tests the DataJoiner, FilterManager, and AggregationEngine classes
 for the interactive map visualization feature.
