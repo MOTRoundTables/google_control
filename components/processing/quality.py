@@ -14,6 +14,7 @@ import logging
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from utils.icons import render_subheader_with_icon, render_icon_text, get_icon_for_component
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +29,10 @@ class QualityReportingInterface:
     
     def __init__(self):
         self.quality_indicators = {
-            'excellent': {'color': '#28a745', 'icon': '✅', 'threshold': 90},
-            'good': {'color': '#17a2b8', 'icon': '✔️', 'threshold': 75},
-            'moderate': {'color': '#ffc107', 'icon': '⚠️', 'threshold': 60},
-            'poor': {'color': '#dc3545', 'icon': '❌', 'threshold': 0}
+            'excellent': {'color': '#28a745', 'icon': 'EXCELLENT', 'threshold': 90},
+            'good': {'color': '#17a2b8', 'icon': 'GOOD', 'threshold': 75},
+            'moderate': {'color': '#ffc107', 'icon': 'MODERATE', 'threshold': 60},
+            'poor': {'color': '#dc3545', 'icon': 'POOR', 'threshold': 0}
         }
     
     def render_quality_dashboard(self, quality_report: Dict[str, Any],
@@ -43,7 +44,7 @@ class QualityReportingInterface:
             quality_report: Quality report from DataQualityChecker
             show_details: Whether to show detailed quality sections
         """
-        st.subheader("📊 Data Quality Dashboard")
+        render_subheader_with_icon('analysis', 'Data Quality Dashboard')
         
         # Overall quality summary
         self._render_overall_quality_summary(quality_report)
@@ -473,7 +474,7 @@ class QualityReportingInterface:
         Returns:
             Dictionary with quality filter settings
         """
-        st.subheader("🔧 Quality Filters")
+        render_subheader_with_icon('filters', 'Quality Filters')
         
         filter_settings = {}
         

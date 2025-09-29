@@ -1088,7 +1088,7 @@ def run_pipeline(params: dict) -> Tuple[pd.DataFrame, pd.DataFrame, dict]:
             logger.warning("No data loaded from CSV file")
             return pd.DataFrame(), pd.DataFrame(), {}
         
-        logger.info(f"✓ Loaded {len(raw_df):,} rows from CSV file")
+        logger.info(f"Loaded {len(raw_df):,} rows from CSV file")
         
         # Step 3: Apply filtering and data selection
         logger.info("Step 3: Applying filtering and data selection...")
@@ -1098,7 +1098,7 @@ def run_pipeline(params: dict) -> Tuple[pd.DataFrame, pd.DataFrame, dict]:
             logger.warning("No data remaining after filtering")
             return pd.DataFrame(), pd.DataFrame(), {}
         
-        logger.info(f"✓ After filtering: {len(df_filtered):,} rows remaining ({len(df_filtered)/len(raw_df)*100:.1f}% retained)")
+        logger.info(f"After filtering: {len(df_filtered):,} rows remaining ({len(df_filtered)/len(raw_df)*100:.1f}% retained)")
         
         # Step 4: Create hourly aggregation
         logger.info("Step 4: Creating hourly aggregation...")
@@ -1107,7 +1107,7 @@ def run_pipeline(params: dict) -> Tuple[pd.DataFrame, pd.DataFrame, dict]:
         if hourly_df.empty:
             logger.warning("No hourly aggregation data generated")
         else:
-            logger.info(f"✓ Created hourly aggregation: {len(hourly_df):,} hour-link combinations")
+            logger.info(f"Created hourly aggregation: {len(hourly_df):,} hour-link combinations")
         
         # Step 5: Create weekly hourly profile
         logger.info("Step 5: Creating weekly hourly profile...")
@@ -1116,7 +1116,7 @@ def run_pipeline(params: dict) -> Tuple[pd.DataFrame, pd.DataFrame, dict]:
             if weekly_df.empty:
                 logger.warning("No weekly profile data generated")
             else:
-                logger.info(f"✓ Created weekly profile: {len(weekly_df):,} weekly patterns")
+                logger.info(f"Created weekly profile: {len(weekly_df):,} weekly patterns")
         else:
             logger.warning("Skipping weekly profile creation - no hourly data available")
         
@@ -1233,7 +1233,7 @@ def _validate_pipeline_parameters(params: dict) -> None:
         if not validate_timezone(params['tz']):
             raise ValueError(f"Invalid timezone: {params['tz']}")
     
-    logger.info("✓ All pipeline parameters validated successfully")
+    logger.info("All pipeline parameters validated successfully")
 
 
 def write_all_output_files(raw_df: pd.DataFrame, hourly_df: pd.DataFrame, weekly_df: pd.DataFrame,
@@ -1265,29 +1265,29 @@ def write_all_output_files(raw_df: pd.DataFrame, hourly_df: pd.DataFrame, weekly
             hourly_output_path = Path(output_dir) / 'hourly_agg.csv'
             if write_hourly_aggregation_csv(hourly_df, str(hourly_output_path)):
                 output_files['hourly_agg'] = str(hourly_output_path)
-                logger.info(f"✓ Written: hourly_agg.csv ({len(hourly_df):,} rows)")
+                logger.info(f"Written: hourly_agg.csv ({len(hourly_df):,} rows)")
             else:
                 logger.error("✗ Failed to write hourly_agg.csv")
         else:
-            logger.warning("⚠ Skipping hourly_agg.csv - no data available")
+            logger.warning("Skipping hourly_agg.csv - no data available")
         
         # Required Output 2: weekly_hourly_profile.csv
         if not weekly_df.empty:
             weekly_output_path = Path(output_dir) / 'weekly_hourly_profile.csv'
             if write_weekly_hourly_profile_csv(weekly_df, str(weekly_output_path)):
                 output_files['weekly_hourly_profile'] = str(weekly_output_path)
-                logger.info(f"✓ Written: weekly_hourly_profile.csv ({len(weekly_df):,} rows)")
+                logger.info(f"Written: weekly_hourly_profile.csv ({len(weekly_df):,} rows)")
             else:
                 logger.error("✗ Failed to write weekly_hourly_profile.csv")
         else:
-            logger.warning("⚠ Skipping weekly_hourly_profile.csv - no data available")
+            logger.warning("Skipping weekly_hourly_profile.csv - no data available")
         
         # Optional Output 3: Quality reports (if enabled)
         if params.get('generate_quality_reports', True) and not raw_df.empty and not hourly_df.empty:
             try:
                 quality_files = write_quality_reports(raw_df, hourly_df, validation_stats, output_dir)
                 output_files.update(quality_files)
-                logger.info(f"✓ Written: {len(quality_files)} quality report files")
+                logger.info(f"Written: {len(quality_files)} quality report files")
             except Exception as e:
                 logger.error(f"✗ Failed to write quality reports: {e}")
         
@@ -1298,7 +1298,7 @@ def write_all_output_files(raw_df: pd.DataFrame, hourly_df: pd.DataFrame, weekly
                 processing_start_time, processing_end_time, output_dir
             )
             output_files.update(log_config_files)
-            logger.info(f"✓ Written: processing log and configuration files")
+            logger.info(f"Written: processing log and configuration files")
         except Exception as e:
             logger.error(f"✗ Failed to write processing log/config: {e}")
         
@@ -1307,7 +1307,7 @@ def write_all_output_files(raw_df: pd.DataFrame, hourly_df: pd.DataFrame, weekly
             try:
                 parquet_files = write_parquet_outputs(hourly_df, weekly_df, output_dir)
                 output_files.update(parquet_files)
-                logger.info(f"✓ Written: {len(parquet_files)} Parquet files")
+                logger.info(f"Written: {len(parquet_files)} Parquet files")
             except Exception as e:
                 logger.error(f"✗ Failed to write Parquet files: {e}")
         
@@ -1316,7 +1316,7 @@ def write_all_output_files(raw_df: pd.DataFrame, hourly_df: pd.DataFrame, weekly
             try:
                 preview_files = write_preview_files(raw_df, hourly_df, weekly_df, output_dir)
                 output_files.update(preview_files)
-                logger.info(f"✓ Written: {len(preview_files)} preview files")
+                logger.info(f"Written: {len(preview_files)} preview files")
             except Exception as e:
                 logger.error(f"✗ Failed to write preview files: {e}")
         

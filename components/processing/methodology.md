@@ -1,4 +1,3 @@
-# Hour Aggregation Methodology
 
 ## 1) Overview
 
