@@ -13,25 +13,19 @@ from datetime import date, datetime, timedelta
 from typing import Dict, List, Tuple, Optional, Any
 import logging
 
-# Import existing modules
+# Import only what we need
 from .controls import InteractiveControls
-from .map_renderer import MapVisualizationRenderer
 from .map_data import MapDataProcessor
-from .symbology import SymbologyEngine
-from components.aggregation.optimizer import PerformanceOptimizer
 
 logger = logging.getLogger(__name__)
 
 
 class HourlyMapInterface:
     """Main interface for Map A (Hourly View) with controls."""
-    
+
     def __init__(self):
         self.controls = InteractiveControls()
-        self.renderer = MapVisualizationRenderer()
         self.data_processor = MapDataProcessor()
-        self.symbology = SymbologyEngine()
-        self.performance_optimizer = PerformanceOptimizer()
         
     def render_hourly_map_page(self, shapefile_data: gpd.GeoDataFrame, 
                               results_data: pd.DataFrame) -> None:
@@ -260,61 +254,25 @@ class HourlyMapInterface:
         
         return filtered_data
     
-    def _create_hourly_map(self, data: gpd.GeoDataFrame, 
+    def _create_hourly_map(self, data: gpd.GeoDataFrame,
                           control_state: Dict[str, Any]) -> folium.Map:
-        """Create the interactive hourly map with styling."""
-        
+        """Create simple hourly map."""
+        from .simple_map import create_simple_map
+
         # Get metric configuration
         metric_config = control_state.get('filters', {}).get('metrics', {})
         metric_type = metric_config.get('metric_type', 'duration')
-        
+
         # Determine value column based on metric type
         if metric_type == 'duration':
             value_column = 'avg_duration_min'
-            metric_title = 'Duration (minutes)'
+            metric_name = 'Duration (min)'
         else:  # speed
             value_column = 'avg_speed_kmh'
-            metric_title = 'Speed (km/h)'
-        
-        if value_column not in data.columns:
-            logger.warning(f"Value column {value_column} not found in data")
-            # Create empty map
-            return self.renderer.renderer.create_base_map()
-        
-        # Calculate symbology
-        values = data[value_column].values
-        if len(values) == 0:
-            return self.renderer.renderer.create_base_map()
-        
-        # Classify data and get colors
-        class_breaks, colors = self.symbology.classify_and_color_data(
-            values, metric_type, method='quantiles', n_classes=5
-        )
-        
-        # Create style configuration
-        style_config = {
-            'color': colors[0] if colors else '#3388ff',
-            'weight': 3,
-            'opacity': 0.8
-        }
-        
-        # Create legend configuration
-        legend_config = {
-            'title': metric_title,
-            'class_breaks': class_breaks,
-            'colors': colors,
-            'active_filters': self._format_active_filters(control_state),
-            'classification_method': 'quantiles'
-        }
-        
-        # Create map
-        map_obj = self.renderer.create_interactive_map(
-            data=data,
-            style_config=style_config,
-            legend_config=legend_config
-        )
-        
-        return map_obj
+            metric_name = 'Speed (km/h)'
+
+        # Create simple map
+        return create_simple_map(data, value_column, metric_name)
     
     def _format_active_filters(self, control_state: Dict[str, Any]) -> List[str]:
         """Format active filters for legend display."""
