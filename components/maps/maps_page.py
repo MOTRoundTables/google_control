@@ -433,7 +433,18 @@ class MapsPageInterface:
                 for file_type, file_path in found_files.items():
                     try:
                         data = pd.read_csv(file_path)
-                        
+
+                        # Standardize column names
+                        column_mappings = {
+                            'hour_of_day': 'hour',
+                            'avg_dur': 'avg_duration_sec',
+                            'avg_speed': 'avg_speed_kmh'
+                        }
+
+                        for old_col, new_col in column_mappings.items():
+                            if old_col in data.columns and new_col not in data.columns:
+                                data = data.rename(columns={old_col: new_col})
+
                         if file_type == 'hourly':
                             st.session_state.maps_hourly_results = data
                             st.info(f"📊 Loaded hourly data: {len(data):,} records from {file_path}")
