@@ -17,6 +17,7 @@ contextily>=1.4.0
 matplotlib>=3.7.0
 plotly>=5.0.0
 streamlit-folium>=0.15.0
+streamlit-option-menu>=0.3.6
 
 # Data Processing & Analysis
 scikit-learn>=1.3.0

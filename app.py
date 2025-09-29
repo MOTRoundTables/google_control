@@ -277,7 +277,6 @@ def main():
     page_configs = [
         ("Dataset Control", "🛡️", "Dataset Control"),
         ("Hour Aggregation", "⏰", "Hour Aggregation"),
-        ("Hour Aggregation Results", "📊", "Hour Aggregation Results"),
         ("Aggregated Maps", "🗺️", "Aggregated Maps"),
         ("Control Methodology", "🔬", "Control Methodology"),
         ("Hour Aggregation Methodology", "📚", "Hour Aggregation Methodology")
@@ -292,7 +291,7 @@ def main():
             selected_page = option_menu(
                 menu_title=None,
                 options=[config[0] for config in page_configs],
-                icons=["shield-check", "clock", "activity", "map", "tools", "book"],
+                icons=["shield-check", "clock", "map", "tools", "book"],
                 menu_icon="cast",
                 default_index=0,
                 orientation="vertical",
@@ -363,8 +362,6 @@ def main():
         main_processing_page()
     elif page == "Aggregated Maps":
         maps_page()
-    elif page == "Hour Aggregation Results":
-        results_page()
     elif page == "Dataset Control":
         control_page()
     elif page == "Hour Aggregation Methodology":
@@ -415,12 +412,64 @@ def main_processing_page():
             type=['csv'],
             help="Select a CSV file with the required columns: DataID, Name, SegmentID, RouteAlternative, RequestedTime, Timestamp, DayInWeek, DayType, Duration, Distance, Speed, Url, Polyline"
         )
+
+        # Automatic folder detection for control output files
+        extracted_folder_info = None
+        if uploaded_file is not None:
+            file_name = uploaded_file.name
+            if any(keyword in file_name.lower() for keyword in ['best_valid', 'failed_observations', 'validated_data']):
+                st.info("💡 **Control output file detected!** Automatic folder extraction will be used.")
+
+                # Try to extract folder from recent control results in session state
+                extracted_folder = None
+
+                # Method 1: Check session state for recent control results
+                if 'control_results' in st.session_state and st.session_state.control_results.get('success'):
+                    control_output_files = st.session_state.control_results.get('output_files', {})
+                    if control_output_files:
+                        try:
+                            sample_path = next(iter(control_output_files.values()))
+                            extracted_folder = Path(sample_path).parent.name
+                            st.success(f"✅ **Auto-detected from session:** `{extracted_folder}`")
+                        except Exception:
+                            pass
+
+                # Method 2: Look for pattern in filename itself
+                if not extracted_folder:
+                    import re
+                    timestamp_pattern = r'(\d{2}_\d{2}_\d{2}_\d{2}_\d{2})'
+                    match = re.search(timestamp_pattern, file_name)
+                    if match:
+                        extracted_folder = match.group(1)
+                        st.success(f"✅ **Auto-detected from filename:** `{extracted_folder}`")
+
+                # Method 3: Check recent control output directories
+                if not extracted_folder:
+                    try:
+                        control_output_base = Path('./output/control')
+                        if control_output_base.exists():
+                            # Get the most recent directory
+                            subdirs = [d for d in control_output_base.iterdir() if d.is_dir()]
+                            if subdirs:
+                                most_recent = max(subdirs, key=lambda x: x.stat().st_mtime)
+                                extracted_folder = most_recent.name
+                                st.success(f"✅ **Auto-detected from recent control run:** `{extracted_folder}`")
+                    except Exception:
+                        pass
+
+                # Show final result
+                if extracted_folder:
+                    output_folder = f"from_control_{extracted_folder}"
+                    st.info(f"📁 **Aggregation will be saved to:** `./output/aggregation/{output_folder}/`")
+                    extracted_folder_info = extracted_folder
+                else:
+                    st.warning("⚠️ Could not auto-detect source folder. Will use timestamp-based folder.")
         
         # Output Directory Section
         st.subheader("📂 Output Directory")
         output_dir = st.text_input(
             "Output directory path",
-            value="./output",
+            value="./output/aggregation",
             help="Directory where processed files will be saved. Will be created if it doesn't exist."
         )
         
@@ -712,6 +761,7 @@ def main_processing_page():
         
         st.session_state.full_config.update({
             'uploaded_file': uploaded_file,
+            'extracted_folder_info': extracted_folder_info,
             'output_dir': output_dir,
             'chunk_size': chunk_size,
             'min_valid_per_hour': min_valid_per_hour,
@@ -932,8 +982,74 @@ def main_processing_page():
         
         if not can_run:
             st.warning("⚠️ Please upload a file and configure valid parameters to run processing")
-        
-        # Results are now displayed on the separate Results page
+
+        # Display results if processing was completed
+        if 'processing_results' in st.session_state:
+            results = st.session_state.processing_results
+            if results.get('success', False):
+                st.success("🎉 Processing completed successfully!")
+
+                hourly_df = results.get('hourly_df', pd.DataFrame())
+                weekly_df = results.get('weekly_df', pd.DataFrame())
+                output_files = results.get('output_files', {})
+
+                # Show summary statistics
+                st.subheader("📊 Summary")
+
+                if not hourly_df.empty:
+                    st.metric("Hourly Records", f"{len(hourly_df):,}")
+
+                if not weekly_df.empty:
+                    st.metric("Weekly Patterns", f"{len(weekly_df):,}")
+
+                if output_files:
+                    st.metric("Output Files", len(output_files))
+
+                # Show preview of results
+                if not hourly_df.empty:
+                    with st.expander("📋 Hourly Data Preview", expanded=False):
+                        st.dataframe(hourly_df.head(10), use_container_width=True)
+
+                if not weekly_df.empty:
+                    with st.expander("📅 Weekly Profile Preview", expanded=False):
+                        st.dataframe(weekly_df.head(10), use_container_width=True)
+
+                # Download section
+                if output_files:
+                    st.subheader("📥 Downloads")
+                    for file_type, file_path in output_files.items():
+                        if Path(file_path).exists():
+                            with open(file_path, 'rb') as f:
+                                file_data = f.read()
+
+                            # Determine file extension and MIME type
+                            file_ext = Path(file_path).suffix.lower()
+                            if file_ext == '.csv':
+                                mime_type = 'text/csv'
+                            elif file_ext == '.json':
+                                mime_type = 'application/json'
+                            else:
+                                mime_type = 'application/octet-stream'
+
+                            st.download_button(
+                                label=f"📄 {file_type.replace('_', ' ').title()}",
+                                data=file_data,
+                                file_name=Path(file_path).name,
+                                mime=mime_type,
+                                use_container_width=True
+                            )
+
+                # Option to clear results and run again
+                if st.button("🔄 Run New Processing", use_container_width=True):
+                    del st.session_state.processing_results
+                    st.rerun()
+
+            elif results.get('error_message'):
+                st.error(f"❌ Processing failed: {results['error_message']}")
+                # Option to clear error and try again
+                if st.button("🔄 Try Again", use_container_width=True):
+                    del st.session_state.processing_results
+                    st.rerun()
 
 
 # Sidebar methodology content removed - now available on dedicated Methodology page
@@ -988,10 +1104,7 @@ def run_processing():
                 'success': True,
                 'error_message': None
             }
-            
-            # Automatically navigate to Results page
-            st.session_state.current_page = "📊 Results"
-            
+
             # Clean up temporary file
             Path(temp_file_path).unlink(missing_ok=True)
             
@@ -1001,14 +1114,7 @@ def run_processing():
                 Path(temp_file_path).unlink(missing_ok=True)
             raise e
             
-        # Store results in session state for the Results page
-        st.session_state.processing_results = (hourly_df, weekly_df, output_files)
-        
-        # Automatically navigate to Results page
-        st.session_state.current_page = "📊 Results"
-        
         st.success("✅ Processing completed successfully!")
-        st.info("🎉 **Automatically navigating to Results page...**")
         st.rerun()
         
     except Exception as e:
@@ -1066,8 +1172,83 @@ def run_processing():
 
 def prepare_processing_parameters(config: dict) -> dict:
     """Convert GUI configuration to processing pipeline parameters"""
+
+    # Create subdirectory based on input file name
+    uploaded_file = config['uploaded_file']
+    base_output_dir = config['output_dir']
+
+    if uploaded_file is not None:
+        # Get the filename without extension
+        file_name = uploaded_file.name
+        if file_name.endswith('.csv.zip'):
+            base_name = file_name[:-8]  # Remove .csv.zip
+        elif file_name.endswith('.csv'):
+            base_name = file_name[:-4]  # Remove .csv
+        else:
+            base_name = Path(file_name).stem
+
+        # If it's from control output, use automatic detection
+        if 'best_valid_observations' in base_name or 'failed_observations' in base_name or 'validated_data' in base_name:
+            # Check if we have extracted folder info from the UI
+            extracted_folder_info = config.get('extracted_folder_info', '').strip()
+
+            if extracted_folder_info:
+                # Use the automatically detected folder
+                subfolder = f"from_control_{extracted_folder_info}"
+            else:
+                # Fallback detection methods (same as in UI but server-side)
+                extracted_folder = None
+
+                try:
+                    # Method 1: Check session state for recent control results
+                    if 'control_results' in st.session_state and st.session_state.control_results.get('success'):
+                        control_output_files = st.session_state.control_results.get('output_files', {})
+                        if control_output_files:
+                            sample_path = next(iter(control_output_files.values()))
+                            extracted_folder = Path(sample_path).parent.name
+
+                    # Method 2: Look for pattern in filename itself
+                    if not extracted_folder:
+                        import re
+                        timestamp_pattern = r'(\d{2}_\d{2}_\d{2}_\d{2}_\d{2})'
+                        match = re.search(timestamp_pattern, file_name)
+                        if match:
+                            extracted_folder = match.group(1)
+
+                    # Method 3: Check recent control output directories
+                    if not extracted_folder:
+                        control_output_base = Path('./output/control')
+                        if control_output_base.exists():
+                            subdirs = [d for d in control_output_base.iterdir() if d.is_dir()]
+                            if subdirs:
+                                most_recent = max(subdirs, key=lambda x: x.stat().st_mtime)
+                                extracted_folder = most_recent.name
+
+                    # Use extracted folder or fallback
+                    if extracted_folder:
+                        subfolder = f"from_control_{extracted_folder}"
+                    else:
+                        # Final fallback: create timestamp-based folder
+                        from datetime import datetime
+                        timestamp = datetime.now().strftime("%d_%m_%y_%H_%M")
+                        subfolder = f"from_control_{timestamp}_auto_fallback"
+
+                except Exception:
+                    # Exception fallback
+                    from datetime import datetime
+                    timestamp = datetime.now().strftime("%d_%m_%y_%H_%M")
+                    subfolder = f"from_control_{timestamp}_exception"
+        else:
+            # Use the file name as subfolder, cleaning it for filesystem safety
+            subfolder = base_name.replace(' ', '_').replace('(', '').replace(')', '').replace('.', '_')
+
+        # Create timestamped output directory
+        output_dir = str(Path(base_output_dir) / subfolder)
+    else:
+        output_dir = base_output_dir
+
     params = {
-        'output_dir': config['output_dir'],
+        'output_dir': output_dir,
         'chunk_size': config['chunk_size'],
         'min_valid_per_hour': config['min_valid_per_hour'],
         'timezone': config['timezone'],
@@ -1393,281 +1574,7 @@ def create_visualizations(hourly_df: pd.DataFrame):
     pass
 
 
-def results_page():
-    """Results display page"""
-    st.title("📊 Hour Aggregation Results")
-    
-    if 'processing_results' not in st.session_state:
-        st.info("🔍 No results available. Please run processing on the Hour Aggregation page first.")
-        if st.button("🏠 Go to Hour Aggregation"):
-            st.session_state.current_page = "🏠 Hour Aggregation"
-            st.rerun()
-        return
-    
-    # Show success message if just navigated here
-    if 'just_completed_processing' not in st.session_state:
-        st.session_state.just_completed_processing = True
-        st.success("🎉 Processing completed successfully! Here are your results:")
-    
-    # Get results from session state - handle both tuple and dict formats
-    results = st.session_state.processing_results
-    
-    if isinstance(results, tuple):
-        # Tuple format: (hourly_df, weekly_df, output_files)
-        hourly_df, weekly_df, output_files = results
-    elif isinstance(results, dict):
-        # Dictionary format from the processing flow
-        hourly_df = results.get('hourly_df', pd.DataFrame())
-        weekly_df = results.get('weekly_df', pd.DataFrame())
-        output_files = results.get('output_files', {})
-    else:
-        st.error("❌ Invalid results format in session state")
-        return
-    
-    # Display controls for number of rows
-    st.markdown("### 📊 Results Display")
-    
-    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
-    with col1:
-        link_filter = st.text_input(
-            "Filter by link ID:",
-            placeholder="e.g., s_653-655",
-            help="Enter part of a link ID to filter results"
-        )
-    with col2:
-        rows_to_show = st.selectbox(
-            "Rows to show:",
-            [50, 100, 200, 500, 1000, "All"],
-            index=1,  # Default to 100
-            key="rows_selector"
-        )
-    with col3:
-        show_all_columns = st.checkbox("Show all columns", value=False)
-    with col4:
-        if st.button("🔄 Reset Filters"):
-            st.session_state.link_filter = ""
-            st.rerun()
-    
-    # Display results (moved from main processing page)
-    if not hourly_df.empty:
-        col_title, col_sort_info = st.columns([3, 1])
-        with col_title:
-            st.subheader("📊 Hour Aggregation Results")
-        with col_sort_info:
-            st.caption("🔄 **Sorted by:** link_id → date → hour")
-        
-        # Sort hourly data by link_id, date, then hour_of_day
-        hourly_sorted = hourly_df.copy()
-        
-        # Ensure proper data types for sorting
-        if 'date' in hourly_sorted.columns:
-            # Convert date column to datetime if it's not already
-            if hourly_sorted['date'].dtype == 'object':
-                try:
-                    hourly_sorted['date'] = pd.to_datetime(hourly_sorted['date'])
-                except:
-                    pass  # Keep original if conversion fails
-        
-        if 'hour_of_day' in hourly_sorted.columns:
-            # Ensure hour_of_day is numeric
-            hourly_sorted['hour_of_day'] = pd.to_numeric(hourly_sorted['hour_of_day'], errors='coerce')
-        
-        # Define sort columns
-        sort_columns = []
-        if 'link_id' in hourly_sorted.columns:
-            sort_columns.append('link_id')
-        if 'date' in hourly_sorted.columns:
-            sort_columns.append('date')
-        if 'hour_of_day' in hourly_sorted.columns:
-            sort_columns.append('hour_of_day')
-        
-        if sort_columns:
-            hourly_sorted = hourly_sorted.sort_values(sort_columns, na_position='last')
-            # Reset index to ensure proper display order
-            hourly_sorted = hourly_sorted.reset_index(drop=True)
-        
-        # Apply link filter if specified
-        if link_filter and 'link_id' in hourly_sorted.columns:
-            hourly_sorted = hourly_sorted[hourly_sorted['link_id'].str.contains(link_filter, case=False, na=False)]
-        
-        # Determine how many rows to show
-        filtered_count = len(hourly_sorted)
-        if rows_to_show == "All":
-            hourly_display = hourly_sorted
-            rows_text = f"all {filtered_count:,}"
-        else:
-            hourly_display = hourly_sorted.head(rows_to_show)
-            rows_text = f"first {min(rows_to_show, filtered_count):,} of {filtered_count:,}"
-        
-        # Add filter info to caption
-        if link_filter:
-            rows_text += f" (filtered by '{link_filter}' from {len(hourly_df):,} total)"
-        else:
-            rows_text += f" total"
-        
-        # Select columns to display
-        if not show_all_columns and len(hourly_display.columns) > 8:
-            # Show key columns first
-            key_columns = ['link_id', 'date', 'hour_of_day', 'daytype', 'n_total', 'n_valid', 'avg_duration_sec', 'avg_speed_kmh']
-            display_columns = [col for col in key_columns if col in hourly_display.columns]
-            if len(display_columns) < len(hourly_display.columns):
-                remaining_cols = [col for col in hourly_display.columns if col not in display_columns]
-                display_columns.extend(remaining_cols[:8-len(display_columns)])
-            hourly_display = hourly_display[display_columns]
-        
-        st.dataframe(hourly_display, use_container_width=True, height=400)
-        st.caption(f"📊 {rows_text} rows • 🔄 Sorted by: **link_id** → **date** → **hour_of_day**")
-    
-    if not weekly_df.empty:
-        col_title, col_sort_info = st.columns([3, 1])
-        with col_title:
-            st.subheader("📅 Weekly Profile")
-        with col_sort_info:
-            st.caption("🔄 **Sorted by:** link_id → daytype → hour")
-        
-        # Sort weekly data by link_id, daytype, then hour_of_day
-        weekly_sorted = weekly_df.copy()
-        
-        # Ensure proper data types for sorting
-        if 'hour_of_day' in weekly_sorted.columns:
-            # Ensure hour_of_day is numeric
-            weekly_sorted['hour_of_day'] = pd.to_numeric(weekly_sorted['hour_of_day'], errors='coerce')
-        
-        # Define sort columns
-        sort_columns = []
-        if 'link_id' in weekly_sorted.columns:
-            sort_columns.append('link_id')
-        if 'daytype' in weekly_sorted.columns:
-            sort_columns.append('daytype')
-        if 'hour_of_day' in weekly_sorted.columns:
-            sort_columns.append('hour_of_day')
-        
-        if sort_columns:
-            weekly_sorted = weekly_sorted.sort_values(sort_columns, na_position='last')
-            # Reset index to ensure proper display order
-            weekly_sorted = weekly_sorted.reset_index(drop=True)
-        
-        # Apply link filter if specified
-        if link_filter and 'link_id' in weekly_sorted.columns:
-            weekly_sorted = weekly_sorted[weekly_sorted['link_id'].str.contains(link_filter, case=False, na=False)]
-        
-        # Determine how many rows to show
-        filtered_count = len(weekly_sorted)
-        if rows_to_show == "All":
-            weekly_display = weekly_sorted
-            rows_text = f"all {filtered_count:,}"
-        else:
-            weekly_display = weekly_sorted.head(rows_to_show)
-            rows_text = f"first {min(rows_to_show, filtered_count):,} of {filtered_count:,}"
-        
-        # Add filter info to caption
-        if link_filter:
-            rows_text += f" (filtered by '{link_filter}' from {len(weekly_df):,} total)"
-        else:
-            rows_text += f" total"
-        
-        # Select columns to display
-        if not show_all_columns and len(weekly_display.columns) > 8:
-            # Show key columns first
-            key_columns = ['link_id', 'daytype', 'hour_of_day', 'avg_n_valid', 'avg_dur', 'std_dur', 'avg_dist', 'avg_speed']
-            display_columns = [col for col in key_columns if col in weekly_display.columns]
-            if len(display_columns) < len(weekly_display.columns):
-                remaining_cols = [col for col in weekly_display.columns if col not in display_columns]
-                display_columns.extend(remaining_cols[:8-len(display_columns)])
-            weekly_display = weekly_display[display_columns]
-        
-        st.dataframe(weekly_display, use_container_width=True, height=400)
-        st.caption(f"📅 {rows_text} rows • 🔄 Sorted by: **link_id** → **daytype** → **hour_of_day**")
-    
-    # Download section
-    st.subheader("📥 Download Results")
-    
-    if output_files:
-        # Create download buttons for each output file
-        download_cols = st.columns(min(3, len(output_files)))
-        
-        for i, (file_type, file_path) in enumerate(output_files.items()):
-            col_idx = i % 3
-            
-            with download_cols[col_idx]:
-                if Path(file_path).exists():
-                    with open(file_path, 'rb') as f:
-                        file_data = f.read()
-                    
-                    # Determine file extension and MIME type
-                    file_ext = Path(file_path).suffix.lower()
-                    if file_ext == '.csv':
-                        mime_type = 'text/csv'
-                    elif file_ext == '.json':
-                        mime_type = 'application/json'
-                    elif file_ext == '.txt':
-                        mime_type = 'text/plain'
-                    elif file_ext == '.parquet':
-                        mime_type = 'application/octet-stream'
-                    else:
-                        mime_type = 'application/octet-stream'
-                    
-                    # Create download button
-                    st.download_button(
-                        label=f"📄 {file_type.replace('_', ' ').title()}",
-                        data=file_data,
-                        file_name=Path(file_path).name,
-                        mime=mime_type,
-                        use_container_width=True
-                    )
-                else:
-                    st.error(f"❌ File not found: {file_type}")
-    
-    # Show processing log if available
-    if 'processing_log' in output_files:
-        log_path = output_files['processing_log']
-        if Path(log_path).exists():
-            with st.expander("Processing Log", expanded=False):
-                with open(log_path, 'r') as f:
-                    log_content = f.read()
-                st.text(log_content)
-    
-    # Quality metrics if available
-    if not hourly_df.empty:
-        st.subheader("📈 Data Quality Metrics")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Valid hours distribution
-            if 'valid_hour' in hourly_df.columns:
-                valid_hours_count = hourly_df['valid_hour'].sum()
-                total_hours = len(hourly_df)
-                valid_percentage = (valid_hours_count / total_hours * 100) if total_hours > 0 else 0
-                
-                st.metric(
-                    "Valid Hours", 
-                    f"{valid_hours_count:,} / {total_hours:,}",
-                    f"{valid_percentage:.1f}%"
-                )
-        
-        with col2:
-            # Links processed
-            if 'link_id' in hourly_df.columns:
-                unique_links = hourly_df['link_id'].nunique()
-                st.metric("Unique Links", f"{unique_links:,}")
-    
-    # Navigation options
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("🏠 Back to Processing", use_container_width=True):
-            # Navigate back to main processing page
-            st.session_state.current_page = "🏠 Hour Aggregation"
-            st.rerun()
-    
-    with col2:
-        if st.button("🔄 Run New Processing", use_container_width=True):
-            # Clear results and navigate to processing page
-            if 'processing_results' in st.session_state:
-                del st.session_state.processing_results
-            st.session_state.current_page = "🏠 Hour Aggregation"
-            st.rerun()
+# Results page removed - now integrated into main processing page
 
 
 # Control page functions moved to components/control/page.py

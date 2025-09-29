@@ -53,7 +53,7 @@ class MapSymbologyConfig:
                 "max_link_length_m": 10000
             },
             "default_paths": {
-                "shapefile": "E:/google_agg/test_data/google_results_to_golan_17_8_25/google_results_to_golan_17_8_25.shp",
+                "shapefile": "E:/google_agg/test_data/aggregation/google_results_to_golan_17_8_25/google_results_to_golan_17_8_25.shp",
                 "export_directory": "./exports/maps/"
             },
             "map_settings": {

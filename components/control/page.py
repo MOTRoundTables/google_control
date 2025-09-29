@@ -31,6 +31,7 @@ from .report import (
     calculate_expected_observations,
 )
 from components.processing.pipeline import resolve_hebrew_encoding
+from utils.icons import render_title_with_icon, render_subheader_with_icon, render_icon_text, get_icon_for_component
 
 try:
     import chardet  # type: ignore[import]
@@ -42,7 +43,7 @@ except ImportError:  # pragma: no cover - optional dependency
 
 def control_page():
     """Dataset Control and Reporting page"""
-    st.title("🔍 Dataset Control and Reporting")
+    render_title_with_icon('dataset_control', 'Dataset Control and Reporting')
     st.markdown("Validate Google Maps polyline data against reference shapefiles using geometric similarity metrics")
 
     # Main layout
@@ -85,7 +86,7 @@ def control_page():
             }
 
         # File Input Section
-        st.subheader("📁 File Input")
+        render_subheader_with_icon('file_input', 'File Input')
 
         # CSV file upload
         csv_file = st.file_uploader(
@@ -96,10 +97,10 @@ def control_page():
 
         # Shapefile upload
         st.markdown("**Reference Shapefile Upload**")
-        st.info("💡 **How to upload shapefiles:**\n"
+        st.info("**How to upload shapefiles:**\n"
                "- **Option 1 (Recommended)**: Create a ZIP file containing all shapefile components (.shp, .shx, .dbf, .prj) with the same base name\n"
                "- **Option 2**: Upload individual .shp file (may work if companion files have standard names)\n\n"
-               "📁 **To create ZIP from folder**: Select all shapefile files (same base name, different extensions) → Right-click → 'Send to compressed folder' (Windows) or 'Compress' (Mac)")
+               "**To create ZIP from folder**: Select all shapefile files (same base name, different extensions) → Right-click → 'Send to compressed folder' (Windows) or 'Compress' (Mac)")
 
         shapefile_file = st.file_uploader(
             "Choose shapefile (.shp) or ZIP package",
@@ -110,7 +111,7 @@ def control_page():
         # Output directory
         raw_output_dir = st.text_input(
             "Output directory",
-            value="./control_output",
+            value="./output/control",
             help="Directory where validation results and reports will be saved"
         )
 
@@ -127,20 +128,21 @@ def control_page():
         workspace_root = Path.cwd().resolve()
         if not str(output_dir_path).startswith(str(workspace_root)):
             st.warning("Output directory adjusted to workspace for safety")
-            output_dir_path = workspace_root / "control_output"
+            output_dir_path = workspace_root / "output" / "control"
 
         output_dir = str(output_dir_path)
 
         # Validation Parameters Section
-        st.subheader("⚙️ Validation Parameters")
+        render_subheader_with_icon('validation', 'Validation Parameters')
 
         # Test Selection Section
-        st.markdown("**🎯 Select Validation Tests** (tested in order)")
+        render_icon_text('target', 'Select Validation Tests (tested in order)')
         test_col1, test_col2, test_col3 = st.columns(3)
 
         with test_col1:
+            render_icon_text('shield-check', 'Hausdorff Distance')
             use_hausdorff = st.checkbox(
-                "✓ Hausdorff Distance",
+                "Enable Hausdorff Distance Test",
                 value=st.session_state.control_params['use_hausdorff'],
                 help="Test geometric similarity between routes",
                 key="use_hausdorff_input"
@@ -148,8 +150,9 @@ def control_page():
             st.session_state.control_params['use_hausdorff'] = use_hausdorff
 
         with test_col2:
+            render_icon_text('ruler', 'Length Check')
             use_length_check = st.checkbox(
-                "📏 Length Check",
+                "Enable Length Check Test",
                 value=st.session_state.control_params['use_length_check'],
                 help="Compare route lengths",
                 key="use_length_check_input"
@@ -157,8 +160,9 @@ def control_page():
             st.session_state.control_params['use_length_check'] = use_length_check
 
         with test_col3:
+            render_icon_text('map', 'Coverage Analysis')
             use_coverage_check = st.checkbox(
-                "🗺️ Coverage Analysis",
+                "Enable Coverage Analysis",
                 value=st.session_state.control_params['use_coverage_check'],
                 help="Check how much of reference route is covered",
                 key="use_coverage_check_input"
@@ -166,7 +170,7 @@ def control_page():
             st.session_state.control_params['use_coverage_check'] = use_coverage_check
 
             if use_coverage_check:
-                st.warning("⚠️ Coverage analysis is computationally intensive and may take several minutes for large datasets.")
+                st.warning("Coverage analysis is computationally intensive and may take several minutes for large datasets.")
 
         # Parameter Details Sections
         col_param1, col_param2 = st.columns(2)
@@ -174,7 +178,7 @@ def control_page():
         with col_param1:
             # Hausdorff Parameters
             if use_hausdorff:
-                st.markdown("**🎯 Hausdorff Distance Settings**")
+                render_icon_text('shield-check', 'Hausdorff Distance Settings')
                 hausdorff_threshold = st.number_input(
                     "Hausdorff threshold (meters)",
                     min_value=0.1,
@@ -188,7 +192,7 @@ def control_page():
 
             # Length Check Parameters
             if use_length_check:
-                st.markdown("**📏 Length Check Settings**")
+                render_icon_text('ruler', 'Length Check Settings')
                 try:
                     mode_index = ["ratio", "exact"].index(st.session_state.control_params['length_check_mode'])
                 except (ValueError, KeyError):
@@ -256,7 +260,7 @@ def control_page():
         with col_param2:
             # Coverage Parameters
             if use_coverage_check:
-                st.markdown("**🗺️ Coverage Analysis Settings**")
+                render_icon_text('map', 'Coverage Analysis Settings')
                 coverage_min = st.number_input(
                     "Minimum coverage",
                     min_value=0.1,
@@ -280,7 +284,7 @@ def control_page():
                 st.session_state.control_params['coverage_spacing'] = coverage_spacing
 
             # System Settings
-            st.markdown("**⚙️ System Settings**")
+            render_icon_text('gear', 'System Settings')
             polyline_precision = st.number_input(
                 "Polyline precision",
                 min_value=1,
@@ -292,7 +296,7 @@ def control_page():
             st.session_state.control_params['polyline_precision'] = polyline_precision
 
             # Performance Settings
-            st.markdown("**🚀 Performance Settings**")
+            render_icon_text('activity', 'Performance Settings')
             enable_parallel = st.checkbox(
                 "Enable parallel processing",
                 value=st.session_state.control_params.get('enable_parallel', True),
@@ -332,7 +336,7 @@ def control_page():
             coverage_spacing = st.session_state.control_params['coverage_spacing']
 
         # Date Filtering Section
-        st.subheader("📅 Date Filtering (Optional)")
+        render_subheader_with_icon('calendar', 'Date Filtering (Optional)')
 
         use_date_filter = st.checkbox("Enable date filtering", value=False)
 
@@ -369,7 +373,7 @@ def control_page():
                 }
 
         # Data Completeness Analysis Section
-        st.subheader("📊 Data Completeness Analysis (Optional)")
+        render_subheader_with_icon('analysis', 'Data Completeness Analysis (Optional)')
 
         enable_completeness = st.checkbox(
             "Enable data completeness analysis",
@@ -398,7 +402,7 @@ def control_page():
                 st.session_state.control_params['completeness_interval_minutes'] = interval_minutes
 
             with col_dates:
-                st.markdown("**📅 Analysis Period (Auto-detected from CSV):**")
+                st.markdown("**Analysis Period (Auto-detected from CSV):**")
 
                 # Auto-detect dates from uploaded CSV
                 if csv_file is not None:
@@ -410,15 +414,15 @@ def control_page():
                         st.session_state.control_params['completeness_end_date'] = auto_end
 
                         # Show detected range
-                        st.info(f"🔍 **Auto-detected from {total_records:,} records:**\n"
-                               f"📅 **Period:** {auto_start.strftime('%Y-%m-%d')} to {auto_end.strftime('%Y-%m-%d')}\n"
-                               f"⏱️ **Duration:** {(auto_end - auto_start).days + 1} days")
+                        st.info(f"**Auto-detected from {total_records:,} records:**\n"
+                               f"**Period:** {auto_start.strftime('%Y-%m-%d')} to {auto_end.strftime('%Y-%m-%d')}\n"
+                               f"**Duration:** {(auto_end - auto_start).days + 1} days")
 
                         start_date_comp = auto_start
                         end_date_comp = auto_end
 
                     else:
-                        st.warning("⚠️ Could not auto-detect dates from CSV. Please ensure your CSV has a 'Timestamp' column with valid dates.")
+                        st.warning("Could not auto-detect dates from CSV. Please ensure your CSV has a 'Timestamp' column with valid dates.")
 
                         # Fallback to manual input
                         col_start_date, col_end_date = st.columns(2)
@@ -439,24 +443,24 @@ def control_page():
                             )
                             st.session_state.control_params['completeness_end_date'] = end_date_comp
                 else:
-                    st.info("📁 Upload a CSV file to auto-detect the analysis period")
+                    st.info("Upload a CSV file to auto-detect the analysis period")
                     start_date_comp = st.session_state.control_params['completeness_start_date']
                     end_date_comp = st.session_state.control_params['completeness_end_date']
 
             if start_date_comp and end_date_comp:
                 if start_date_comp > end_date_comp:
-                    st.error("❌ Start date must be before or equal to end date")
+                    st.error("Start date must be before or equal to end date")
                 else:
                     # Calculate and show expected observations (use same logic as report)
                     expected_observations = calculate_expected_observations(
                         start_date_comp, end_date_comp, interval_minutes
                     )
 
-                    st.info(f"📈 Expected observations per link: **{expected_observations:,}** "
+                    st.info(f"Expected observations per link: **{expected_observations:,}** "
                            f"({interval_minutes} min intervals, 24/7 from {start_date_comp} to {end_date_comp})")
 
         # Advanced Options
-        with st.expander("🔧 Advanced Options", expanded=False):
+        with st.expander("Advanced Options", expanded=False):
             crs_metric = st.text_input(
                 "Metric CRS",
                 value=st.session_state.control_params['crs_metric'],
@@ -507,7 +511,7 @@ def control_page():
                 st.error("Please upload both CSV and shapefile to run validation")
 
         if not can_validate:
-            st.warning("⚠️ Please upload both CSV file and reference shapefile")
+            st.warning("Please upload both CSV file and reference shapefile")
 
         # Show file status
         if csv_file:
@@ -543,7 +547,7 @@ def run_control_validation(csv_file, shapefile_file, output_dir,
         progress_bar = st.progress(0)
         status_text = st.empty()
 
-        status_text.text("🔧 Preparing validation parameters...")
+        status_text.text("Preparing validation parameters...")
         progress_bar.progress(10)
 
         # Create validation parameters
@@ -572,7 +576,7 @@ def run_control_validation(csv_file, shapefile_file, output_dir,
             polyline_precision=polyline_precision
         )
 
-        status_text.text("📄 Loading CSV data...")
+        status_text.text("Loading CSV data...")
         progress_bar.progress(20)
 
         # Load CSV data with proper encoding handling
@@ -580,43 +584,43 @@ def run_control_validation(csv_file, shapefile_file, output_dir,
 
         # Check if CSV loading failed
         if csv_df is None:
-            st.error("❌ **CSV Loading Failed**")
+            st.error("**CSV Loading Failed**")
             st.error("Could not read the uploaded CSV file with any supported encoding.")
-            st.info("💡 Please ensure your CSV file is properly formatted and uses a supported encoding (UTF-8, CP1255, etc.)")
+            st.info("Please ensure your CSV file is properly formatted and uses a supported encoding (UTF-8, CP1255, etc.)")
             st.stop()
 
         # Fix Hebrew text encoding issues if needed
         csv_df = fix_hebrew_columns(csv_df)
 
-        status_text.text("🗺️ Loading shapefile...")
+        status_text.text("Loading shapefile...")
         progress_bar.progress(30)
 
         # Save and load shapefile
         try:
             temp_shp_path = save_shapefile_upload(shapefile_file)
             file_type = "ZIP" if shapefile_file.name.lower().endswith('.zip') else "SHP"
-            st.success(f"✅ {file_type} file processed successfully")
+            st.success(f"{file_type} file processed successfully")
         except ValueError as e:
-            st.error(f"❌ Shapefile error: {e}")
+            st.error(f"Shapefile error: {e}")
             return
         except Exception as e:
-            st.error(f"❌ Unexpected error processing shapefile: {e}")
+            st.error(f"Unexpected error processing shapefile: {e}")
             return
 
         try:
             # Try to load shapefile with robust error handling
             shapefile_gdf = load_shapefile_robust(temp_shp_path)
-            st.success(f"✅ Loaded shapefile with {len(shapefile_gdf)} features")
+            st.success(f"Loaded shapefile with {len(shapefile_gdf)} features")
         except Exception as e:
-            st.error(f"❌ Failed to load shapefile: {e}")
+            st.error(f"Failed to load shapefile: {e}")
             cleanup_temp_shapefile(temp_shp_path)
             return
 
-        status_text.text("🔍 Running validation...")
+        status_text.text("Running validation...")
         progress_bar.progress(40)
 
         # Run batch validation with proper route alternative processing
-        validation_msg = "🔍 Running batch validation with route alternative grouping..."
+        validation_msg = "Running batch validation with route alternative grouping..."
         if use_coverage_check:
             validation_msg += " (Coverage analysis enabled - this may take several minutes)"
         status_text.text(validation_msg)
@@ -624,14 +628,14 @@ def run_control_validation(csv_file, shapefile_file, output_dir,
 
         # Use batch validation with progress tracking
         def progress_callback(message):
-            status_text.text(f"⏳ {message}")
+            status_text.text(f"Processing: {message}")
 
         # Choose parallel or sequential validation based on user settings
         enable_parallel = st.session_state.control_params.get('enable_parallel', True)
         max_workers = st.session_state.control_params.get('max_workers', 1)
 
         if enable_parallel and len(csv_df) >= 5000:
-            status_text.text(f"🚀 Using parallel validation with {max_workers} CPU cores...")
+            status_text.text(f"Using parallel validation with {max_workers} CPU cores...")
             result_df = validate_dataframe_batch_parallel(
                 csv_df, shapefile_gdf, params,
                 max_workers=max_workers,
@@ -639,20 +643,20 @@ def run_control_validation(csv_file, shapefile_file, output_dir,
             )
         else:
             if enable_parallel and len(csv_df) < 5000:
-                status_text.text("🔍 Using sequential validation (dataset too small for parallel benefit)...")
+                status_text.text("Using sequential validation (dataset too small for parallel benefit)...")
             else:
-                status_text.text("🔍 Using sequential validation...")
+                status_text.text("Using sequential validation...")
             result_df = validate_dataframe_batch(csv_df, shapefile_gdf, params, progress_callback=progress_callback)
 
         # Update progress
         progress_bar.progress(70)
-        status_text.text("✅ Batch validation completed with proper route alternative handling")
+        status_text.text("Batch validation completed with proper route alternative handling")
 
         # Track validation completion time
         validation_end_time = datetime.now()
         validation_time = (validation_end_time - start_time).total_seconds() / 60
 
-        status_text.text("📊 Generating link reports...")
+        status_text.text("Generating link reports...")
         progress_bar.progress(80)
 
         # Prepare date filter if specified
@@ -675,11 +679,15 @@ def run_control_validation(csv_file, shapefile_file, output_dir,
         report_end_time = datetime.now()
         report_time = (report_end_time - validation_end_time).total_seconds() / 60
 
-        status_text.text("💾 Saving results...")
+        status_text.text("Saving results...")
         progress_bar.progress(90)
 
-        # Create output directory
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        # Create timestamped output directory
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%d_%m_%y_%H_%M")
+        timestamped_output_dir = Path(output_dir) / timestamp
+        timestamped_output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = str(timestamped_output_dir)
 
         # Save results
         output_files = save_validation_results(result_df, report_gdf, output_dir, generate_shapefile, completeness_params)
@@ -703,7 +711,7 @@ def run_control_validation(csv_file, shapefile_file, output_dir,
         log_file = create_performance_log(output_dir, start_time, validation_time, report_time, params_for_log)
         output_files['performance_log'] = log_file
 
-        status_text.text("✅ Validation completed!")
+        status_text.text("Validation completed!")
         progress_bar.progress(100)
 
         # Store results in session state
@@ -719,11 +727,11 @@ def run_control_validation(csv_file, shapefile_file, output_dir,
         # Clean up temporary shapefile
         cleanup_temp_shapefile(temp_shp_path)
 
-        st.success("✅ Validation completed successfully!")
+        st.success("Validation completed successfully!")
         st.rerun()
 
     except Exception as e:
-        st.error(f"❌ Validation failed: {str(e)}")
+        st.error(f"Validation failed: {str(e)}")
 
         # Store error in session state
         st.session_state.control_results = {
@@ -759,19 +767,18 @@ def _maybe_add_zip_download(file_path: Path, key: str, output_files: dict, thres
 
 def save_validation_results(result_df, report_gdf, output_dir, generate_shapefile, completeness_params=None,
                            progress_callback=None, status_callback=None):
-    """Save validation results to files with progress tracking"""
-    output_files = {}
+    """Save validation results to files with progress tracking."""
+    output_files: dict[str, str] = {}
 
-    # File tracking for progress
     total_files = 0
     completed_files = 0
 
     def update_progress():
         nonlocal completed_files
         completed_files += 1
-        if progress_callback:
+        if progress_callback and total_files > 0:
             progress_pct = int((completed_files / total_files) * 100)
-            progress_callback(90 + (progress_pct * 10 // 100))  # Scale to 90-100% range
+            progress_callback(90 + (progress_pct * 10 // 100))
 
     validated_csv_path = Path(output_dir) / "validated_data.csv"
 
@@ -793,76 +800,268 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
 
     def _write_csv(dataframe, destination, columns=None, file_description=None):
         destination = Path(destination)
-        # More accurate file size estimation based on actual data
         if not dataframe.empty:
-            # Sample first 1000 rows to estimate average row size
             sample_size = min(1000, len(dataframe))
             sample_df = dataframe.head(sample_size)
-
-            # Convert to CSV string and measure actual size
             sample_csv = sample_df.to_csv(index=False, columns=columns, float_format='%.6g')
             avg_row_size = len(sample_csv.encode('utf-8')) / sample_size
-            estimated_size_bytes = avg_row_size * len(dataframe)
-            size_mb = estimated_size_bytes / (1024 * 1024)
+            size_mb = (avg_row_size * len(dataframe)) / (1024 * 1024)
         else:
             size_mb = 0.1
+
         if status_callback and file_description:
             status_callback(f"💾 Saving {file_description} ({size_mb:.1f}MB estimated)...")
 
-        # Optimize DataFrame memory usage before writing
         if not dataframe.empty:
-            # Convert categorical columns to string for better compression
             for col in dataframe.select_dtypes(include=['category']):
                 dataframe[col] = dataframe[col].astype(str)
-
-            # Optimize numeric columns
             for col in dataframe.select_dtypes(include=['int64']):
                 if dataframe[col].min() >= 0 and dataframe[col].max() <= 2**31 - 1:
                     dataframe[col] = dataframe[col].astype('int32')
-
             for col in dataframe.select_dtypes(include=['float64']):
-                # Check if column can be converted to float32 without significant precision loss
                 if dataframe[col].notna().any():
                     max_val = dataframe[col].abs().max()
-                    if max_val <= 3.4e+38:  # float32 max
+                    if max_val <= 3.4e+38:
                         dataframe[col] = dataframe[col].astype('float32')
 
-        # Simplified file writing strategy with accurate size estimation
-        file_size_mb = size_mb
-
-        if file_size_mb > 100:
-            # Very large files (>100MB): Use optimized pandas writing without compression
-            if status_callback and file_description:
-                status_callback(f"💾 Large file ({file_size_mb:.1f}MB) - using fast uncompressed writing...")
-
-            dataframe.to_csv(
-                destination,
-                index=False,
-                encoding='utf-8-sig',
-                columns=columns,
-                lineterminator='\n',
-                float_format='%.6g'
-            )
-        else:
-            # Medium and small files: Use standard optimized pandas writing
-            # Pandas to_csv is already highly optimized for most cases
-            if status_callback and file_description:
-                status_callback(f"💾 Writing {file_description} ({file_size_mb:.1f}MB)...")
-
-            dataframe.to_csv(
-                destination,
-                index=False,
-                encoding='utf-8-sig',
-                columns=columns,
-                lineterminator='\n',
-                float_format='%.6g'
-            )
+        dataframe.to_csv(
+            destination,
+            index=False,
+            encoding='utf-8-sig',
+            columns=columns,
+            lineterminator='\n',
+            float_format='%.6g'
+        )
 
         actual_size_mb = destination.stat().st_size / (1024 * 1024)
         if status_callback and file_description:
             status_callback(f"✅ Saved {file_description} ({actual_size_mb:.1f}MB)")
 
         return str(destination)
+
+    best_valid_df = extract_best_valid_observations(result_df_sorted)
+
+    validation_failed_df = extract_failed_observations(result_df_sorted)
+    if not validation_failed_df.empty:
+        validation_failed_df = validation_failed_df[
+            validation_failed_df.get('valid_code', 0).between(1, 3)
+        ].copy()
+
+    missing_observations_df = pd.DataFrame()
+    if completeness_params:
+        missing_observations_df = extract_missing_observations(result_df_sorted, completeness_params, report_gdf)
+
+    no_data_links_df = extract_no_data_links(result_df_sorted, report_gdf)
+    report_with_stats_gdf = report_gdf.copy()
+
+    drop_for_csv = {
+        'geometry',
+        'single_alt_timestamps',
+        'multi_alt_timestamps',
+        'result_code',
+        'result_label',
+        'num',
+        'total_timestamps',
+        'successful_timestamps',
+        'failed_timestamps',
+        'success_rate',
+    }
+
+    metric_order = [
+        'perfect_match_percent',
+        'threshold_pass_percent',
+        'failed_percent',
+        'total_success_rate',
+        'total_observations',
+        'successful_observations',
+        'failed_observations',
+        'total_routes',
+        'single_route_observations',
+        'multi_route_observations',
+        'expected_observations',
+        'missing_observations',
+        'data_coverage_percent',
+    ]
+    metric_set = set(metric_order)
+
+    base_cols = [
+        col for col in report_with_stats_gdf.columns
+        if col not in metric_set and col not in drop_for_csv
+    ]
+    ordered_cols = []
+    for ident in ('From', 'To'):
+        if ident in base_cols:
+            ordered_cols.append(ident)
+            base_cols.remove(ident)
+    ordered_cols.extend([
+        col for col in metric_order
+        if col in report_with_stats_gdf.columns and col not in drop_for_csv
+    ])
+    ordered_cols.extend([col for col in base_cols if col not in ordered_cols])
+
+    best_csv_path = Path(output_dir) / "best_valid_observations.csv"
+    failed_csv_path = Path(output_dir) / "failed_observations.csv"
+    missing_csv_path = Path(output_dir) / "missing_observations.csv"
+    no_data_csv_path = Path(output_dir) / "no_data_links.csv"
+    report_csv_path = Path(output_dir) / "link_report.csv"
+
+    csv_jobs = [
+        ('validated_csv', result_df_sorted, validated_csv_path, 'validated_data.csv', None),
+        ('best_valid_observations_csv', best_valid_df, best_csv_path, 'best_valid_observations.csv', None),
+        ('no_data_links_csv', no_data_links_df, no_data_csv_path, 'no_data_links.csv', None),
+        ('link_report_csv', report_with_stats_gdf, report_csv_path, 'link_report.csv', ordered_cols),
+    ]
+
+    if not validation_failed_df.empty:
+        csv_jobs.append(('failed_observations_csv', validation_failed_df, failed_csv_path, 'failed_observations.csv', None))
+
+    if completeness_params:
+        csv_jobs.append(('missing_observations_csv', missing_observations_df, missing_csv_path, 'missing_observations.csv', None))
+
+    total_files = len(csv_jobs)
+
+    if generate_shapefile:
+        shapefile_steps = 2  # link report create + zip
+        if not validation_failed_df.empty:
+            shapefile_steps += 3  # failed create + zip + reference zip
+        if completeness_params and not missing_observations_df.empty:
+            shapefile_steps += 2  # missing create + zip
+        shapefile_steps += 2  # no-data create + zip
+        total_files += shapefile_steps
+
+    total_files = max(total_files, 1)
+
+    future_to_job: dict = {}
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        def submit_csv(key, dataframe, destination, description, columns=None):
+            future = executor.submit(_write_csv, dataframe, destination, columns, description)
+            future_to_job[future] = (key, description)
+
+        for key, dataframe, destination, description, columns in csv_jobs:
+            submit_csv(key, dataframe, destination, description, columns)
+
+        for future in as_completed(tuple(future_to_job.keys())):
+            key, description = future_to_job.pop(future)
+            path_str = future.result()
+            path_obj = Path(path_str)
+            output_files[key] = path_str
+            _maybe_add_zip_download(path_obj, key, output_files)
+            update_progress()
+            if status_callback:
+                status_callback(f"✅ Completed {description} ({completed_files}/{total_files})")
+
+    if generate_shapefile:
+        zip_compresslevel = 3
+
+        if status_callback:
+            status_callback("🗺️ Creating link report shapefile...")
+
+        report_shp_path = Path(output_dir) / "link_report.shp"
+        try:
+            write_shapefile_with_results(report_with_stats_gdf, str(report_shp_path))
+            update_progress()
+            if status_callback:
+                file_size_mb = report_shp_path.stat().st_size / (1024 * 1024)
+                status_callback(f"✅ Created link report shapefile ({file_size_mb:.1f}MB)")
+        except Exception as e:
+            print(f"Warning: Failed to create link report shapefile: {e}")
+            if status_callback:
+                status_callback(f"❌ Failed to create link report shapefile: {e}")
+        else:
+            shapefile_zip_path = create_shapefile_zip_package(str(report_shp_path), output_dir, compresslevel=zip_compresslevel)
+            output_files['link_report_zip'] = str(shapefile_zip_path)
+            update_progress()
+            if status_callback:
+                zip_size_mb = Path(shapefile_zip_path).stat().st_size / (1024 * 1024)
+                status_callback(f"✅ Packaged link report shapefile ({zip_size_mb:.1f}MB)")
+
+        if not validation_failed_df.empty:
+            if status_callback:
+                status_callback("🗺️ Creating failed observations shapefile...")
+
+            failed_shp_path = Path(output_dir) / "failed_observations.shp"
+            try:
+                create_failed_observations_shapefile(
+                    validation_failed_df,
+                    report_gdf,
+                    str(failed_shp_path)
+                )
+                update_progress()
+                if status_callback:
+                    file_size_mb = failed_shp_path.stat().st_size / (1024 * 1024)
+                    status_callback(f"✅ Created failed observations shapefile ({file_size_mb:.1f}MB)")
+
+                failed_shapefile_zip_path = create_shapefile_zip_package(str(failed_shp_path), output_dir, compresslevel=zip_compresslevel)
+                output_files['failed_observations_zip'] = str(failed_shapefile_zip_path)
+                update_progress()
+                if status_callback:
+                    zip_size_mb = Path(failed_shapefile_zip_path).stat().st_size / (1024 * 1024)
+                    status_callback(f"✅ Packaged failed observations shapefile ({zip_size_mb:.1f}MB)")
+            except Exception as e:
+                print(f"Warning: Failed to create failed observations shapefile: {e}")
+                if status_callback:
+                    status_callback(f"❌ Failed to create failed observations shapefile: {e}")
+                try:
+                    failed_shp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+            failed_ref_shp_path = Path(output_dir) / "failed_observations_reference.shp"
+            try:
+                create_failed_observations_reference_shapefile(
+                    validation_failed_df,
+                    report_gdf,
+                    str(failed_ref_shp_path)
+                )
+                failed_ref_shapefile_zip_path = create_shapefile_zip_package(str(failed_ref_shp_path), output_dir, compresslevel=zip_compresslevel)
+                output_files['failed_observations_reference_zip'] = str(failed_ref_shapefile_zip_path)
+            except Exception as e:
+                print(f"Warning: Failed to create failed observations reference shapefile: {e}")
+
+        if completeness_params and not missing_observations_df.empty:
+            missing_shp_path = Path(output_dir) / "missing_observations.shp"
+            try:
+                create_csv_matching_shapefile(
+                    missing_observations_df,
+                    report_gdf,
+                    str(missing_shp_path),
+                    geometry_source='shapefile'
+                )
+                missing_shapefile_zip_path = create_shapefile_zip_package(str(missing_shp_path), output_dir, compresslevel=zip_compresslevel)
+                output_files['missing_observations_zip'] = str(missing_shapefile_zip_path)
+                update_progress()
+            except Exception as e:
+                print(f"Warning: Failed to create missing observations shapefile: {e}")
+
+        no_data_shp_path = Path(output_dir) / "no_data_links.shp"
+        try:
+            if not no_data_links_df.empty:
+                create_csv_matching_shapefile(
+                    no_data_links_df,
+                    report_gdf,
+                    str(no_data_shp_path),
+                    geometry_source='shapefile'
+                )
+            else:
+                empty_gdf = gpd.GeoDataFrame(columns=['link_id', 'Name', 'is_valid', 'valid_code'], geometry=[])
+                empty_gdf.crs = report_gdf.crs
+                empty_gdf.to_file(str(no_data_shp_path))
+            no_data_shapefile_zip_path = create_shapefile_zip_package(str(no_data_shp_path), output_dir, compresslevel=zip_compresslevel)
+            output_files['no_data_links_zip'] = str(no_data_shapefile_zip_path)
+            update_progress()
+        except Exception as e:
+            print(f"Warning: Failed to create no-data links shapefile: {e}")
+
+    del best_valid_df
+    del missing_observations_df
+    del no_data_links_df
+    del report_with_stats_gdf
+    if 'validation_failed_df' in locals():
+        del validation_failed_df
+    gc.collect()
+
+    return output_files
 
 def create_performance_log(output_dir, start_time, validation_time, report_time, params):
     """Create performance and parameter log file"""
@@ -1037,12 +1236,12 @@ Generated at: {output_dir}
             _maybe_add_zip_download(path_obj, key, output_files)
             update_progress()
             if status_callback:
-                status_callback(f"✅ Completed {description} ({completed_files}/{total_files})")
+                status_callback(f"Completed {description} ({completed_files}/{total_files})")
 
     # Generate shapefiles when requested
     if generate_shapefile:
         if status_callback:
-            status_callback(f"🗺️ Creating link report shapefile...")
+            status_callback(f"Creating link report shapefile...")
 
         report_shp_path = Path(output_dir) / "link_report.shp"
         try:
@@ -1050,11 +1249,11 @@ Generated at: {output_dir}
             update_progress()
             if status_callback:
                 file_size_mb = report_shp_path.stat().st_size / (1024 * 1024)
-                status_callback(f"✅ Created link report shapefile ({file_size_mb:.1f}MB)")
+                status_callback(f"Created link report shapefile ({file_size_mb:.1f}MB)")
         except Exception as e:
             print(f"Warning: Failed to create link report shapefile: {e}")
             if status_callback:
-                status_callback(f"❌ Failed to create link report shapefile: {e}")
+                status_callback(f"Failed to create link report shapefile: {e}")
 
         if status_callback:
             status_callback(f"📦 Packaging link report shapefile...")
@@ -1063,11 +1262,11 @@ Generated at: {output_dir}
         update_progress()
         if status_callback:
             zip_size_mb = Path(shapefile_zip_path).stat().st_size / (1024 * 1024)
-            status_callback(f"✅ Packaged link report shapefile ({zip_size_mb:.1f}MB)")
+            status_callback(f"Packaged link report shapefile ({zip_size_mb:.1f}MB)")
 
         if not validation_failed_df.empty:
             if status_callback:
-                status_callback(f"🗺️ Creating failed observations shapefile...")
+                status_callback(f"Creating failed observations shapefile...")
 
             failed_shp_path = Path(output_dir) / "failed_observations.shp"
             try:
@@ -1079,7 +1278,7 @@ Generated at: {output_dir}
                 update_progress()
                 if status_callback:
                     file_size_mb = failed_shp_path.stat().st_size / (1024 * 1024)
-                    status_callback(f"✅ Created failed observations shapefile ({file_size_mb:.1f}MB)")
+                    status_callback(f"Created failed observations shapefile ({file_size_mb:.1f}MB)")
 
                 if status_callback:
                     status_callback(f"📦 Packaging failed observations shapefile...")
@@ -1088,11 +1287,11 @@ Generated at: {output_dir}
                 update_progress()
                 if status_callback:
                     zip_size_mb = Path(failed_shapefile_zip_path).stat().st_size / (1024 * 1024)
-                    status_callback(f"✅ Packaged failed observations shapefile ({zip_size_mb:.1f}MB)")
+                    status_callback(f"Packaged failed observations shapefile ({zip_size_mb:.1f}MB)")
             except Exception as e:
                 print(f"Warning: Failed to create failed observations shapefile: {e}")
                 if status_callback:
-                    status_callback(f"❌ Failed to create failed observations shapefile: {e}")
+                    status_callback(f"Failed to create failed observations shapefile: {e}")
 
             failed_ref_shp_path = Path(output_dir) / "failed_observations_reference.shp"
             try:
@@ -1215,7 +1414,7 @@ def load_csv_with_encoding(csv_file):
 
         if raw_data.startswith(b'\xef\xbb\xbf'):
             detected_encoding = 'utf-8-sig'
-            st.info("📝 Detected UTF-8 with BOM encoding")
+            st.info("Detected UTF-8 with BOM encoding")
         else:
             detection = chardet.detect(raw_data) if HAS_CHARDET and raw_data else {}
             candidate = detection.get('encoding') if detection else None
@@ -1224,16 +1423,16 @@ def load_csv_with_encoding(csv_file):
 
             if candidate and resolved and resolved.lower() != candidate.lower():
                 detected_encoding = resolved
-                st.info(f"📝 Detected {candidate} (confidence: {confidence:.2f}) but using {resolved} based on Hebrew text")
+                st.info(f"Detected {candidate} (confidence: {confidence:.2f}) but using {resolved} based on Hebrew text")
             elif candidate and confidence > 0.7:
                 detected_encoding = resolved
-                st.info(f"📝 Detected encoding: {detected_encoding} (confidence: {confidence:.2f})")
+                st.info(f"Detected encoding: {detected_encoding} (confidence: {confidence:.2f})")
             else:
                 detected_encoding = resolved
-                st.info("📝 Using default encoding: cp1255 (Hebrew)")
+                st.info("Using default encoding: cp1255 (Hebrew)")
     except Exception:
         detected_encoding = resolve_hebrew_encoding(raw_data, None) if raw_data else 'utf-8-sig'
-        st.info("📝 Encoding detection fell back to heuristic defaults")
+        st.info("Encoding detection fell back to heuristic defaults")
 
     # Get file size for chunking decision
     file_size = len(csv_file.getvalue())
@@ -1241,7 +1440,7 @@ def load_csv_with_encoding(csv_file):
     # Read CSV with proper encoding
     try:
         if file_size > 50 * 1024 * 1024:  # 50MB threshold for chunking
-            st.info("🔄 Large file detected, processing in chunks...")
+            st.info("Large file detected, processing in chunks...")
             chunk_reader = pd.read_csv(temp_file_path, chunksize=10000, encoding=detected_encoding)
             chunks = []
             chunk_count = 0
@@ -1265,7 +1464,7 @@ def load_csv_with_encoding(csv_file):
     except UnicodeDecodeError:
         # Try alternative encodings if detection fails
         fallback_encodings = ['utf-8-sig', 'cp1255', 'utf-8', 'latin-1', 'iso-8859-8', 'windows-1255', 'utf-16']
-        st.warning("⚠️ Primary encoding failed, trying alternatives...")
+        st.warning("Primary encoding failed, trying alternatives...")
 
         for fallback_encoding in fallback_encodings:
             try:
@@ -1286,16 +1485,16 @@ def load_csv_with_encoding(csv_file):
                     st.success(f"Successfully read file using {fallback_encoding} encoding ({len(csv_df)} rows from {chunk_count} chunks)")
                 else:
                     csv_df = pd.read_csv(temp_file_path, encoding=fallback_encoding)
-                    st.success(f"✅ Successfully read file using {fallback_encoding} encoding")
+                    st.success(f"Successfully read file using {fallback_encoding} encoding")
                 break
             except UnicodeDecodeError:
                 continue
             except Exception as e:
-                st.warning(f"⚠️ {fallback_encoding} failed: {str(e)[:50]}...")
+                st.warning(f"{fallback_encoding} failed: {str(e)[:50]}...")
                 continue
         else:
-            st.error("❌ Could not read CSV file with any supported encoding. Please check the file format.")
-            st.info("💡 Supported encodings: UTF-8, CP1255 (Hebrew), Latin-1, ISO-8859-8, Windows-1255, UTF-16")
+            st.error("Could not read CSV file with any supported encoding. Please check the file format.")
+            st.info("Supported encodings: UTF-8, CP1255 (Hebrew), Latin-1, ISO-8859-8, Windows-1255, UTF-16")
             # Clean up temp file
             try:
                 os.unlink(temp_file_path)
@@ -1437,7 +1636,7 @@ def save_shapefile_upload(uploaded_file):
                     missing_files.append(ext)
 
             if missing_files:
-                st.warning(f"⚠️ Missing shapefile components: {', '.join(missing_files)} - proceeding anyway")
+                st.warning(f"Missing shapefile components: {', '.join(missing_files)} - proceeding anyway")
 
             # Clean up the ZIP file
             zip_path.unlink()
@@ -1455,7 +1654,7 @@ def save_shapefile_upload(uploaded_file):
             f.write(uploaded_file.getvalue())
 
         # Warn user about potential missing companion files
-        st.warning("⚠️ **Single .shp file uploaded**\n\n"
+        st.warning("**Single .shp file uploaded**\n\n"
                   "Shapefile companion files (.shx, .dbf, .prj) are missing. "
                   "This may cause issues in GIS applications. "
                   "For best results, upload a ZIP file containing all shapefile components with the same base name.")
@@ -1519,14 +1718,20 @@ def _collect_shapefile_components(base_path: Path):
             yield component_path
 
 
-def create_shapefile_zip_package(shp_path, output_dir, cleanup=True):
+def create_shapefile_zip_package(shp_path, output_dir, cleanup=True, compresslevel=6):
     """Create a ZIP file containing all shapefile components."""
     base_path = Path(shp_path).with_suffix('')
     zip_path = Path(output_dir) / f"{base_path.stem}_shapefile.zip"
 
     components = list(_collect_shapefile_components(base_path))
 
-    with zipfile.ZipFile(zip_path, 'w', compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zip_file:
+    with zipfile.ZipFile(
+        zip_path,
+        'w',
+        compression=zipfile.ZIP_DEFLATED,
+        allowZip64=True,
+        compresslevel=compresslevel
+    ) as zip_file:
         for component_path in components:
             zip_file.write(component_path, component_path.name)
             if cleanup:
@@ -1617,10 +1822,10 @@ def display_control_results():
     results = st.session_state.control_results
 
     if not results['success']:
-        st.error(f"❌ Validation failed: {results['error_message']}")
+        st.error(f"Validation failed: {results['error_message']}")
         return
 
-    st.header("📊 Validation Results")
+    render_subheader_with_icon('results', 'Validation Results')
 
     validated_df = results['validated_df']
     report_gdf = results['report_gdf']
@@ -1678,7 +1883,7 @@ def display_control_results():
 
     # Validation code distribution
     if 'valid_code' in validated_df.columns:
-        st.subheader("📋 Validation Code Distribution")
+        render_subheader_with_icon('bar-chart', 'Validation Code Distribution')
 
         code_counts = validated_df['valid_code'].value_counts().sort_index()
 
@@ -1714,7 +1919,7 @@ def display_control_results():
             failed_observations = observation_groups.filter(lambda x: not x['is_valid'].any())
 
             if len(failed_observations) > 0:
-                st.subheader("❌ Failed Observations Details")
+                st.subheader("Failed Observations Details")
 
                 # Group failed observations by link and timestamp
                 failed_groups = failed_observations.groupby([name_col, timestamp_col])
@@ -1749,12 +1954,12 @@ def display_control_results():
                 failed_df = pd.DataFrame(failed_summary)
                 st.dataframe(failed_df, use_container_width=True)
 
-                st.info(f"📊 **{len(failed_observations)} routes** across **{len(failed_summary)} observations** failed validation")
+                st.info(f"**{len(failed_observations)} routes** across **{len(failed_summary)} observations** failed validation")
             else:
-                st.success("🎉 All observations have at least one valid route!")
+                st.success("All observations have at least one valid route!")
 
     # Sample validation results
-    st.subheader("📄 Sample Validation Results")
+    st.subheader("Sample Validation Results")
 
     # Show first 10 rows with key columns
     name_col = 'Name' if 'Name' in validated_df.columns else 'name'
@@ -1772,7 +1977,7 @@ def display_control_results():
     st.dataframe(sample_df, use_container_width=True)
 
     # Link report preview
-    st.subheader("🗺️ Link Report Preview")
+    st.subheader("Link Report Preview")
 
     # Updated columns with new field names and breakdown
     report_display_cols = [
@@ -1797,13 +2002,13 @@ def display_control_results():
         st.dataframe(display_df, use_container_width=True)
 
         # Add explanation of the breakdown
-        st.info("📊 **Breakdown Explanation:**\n"
+        st.info("**Breakdown Explanation:**\n"
                "• **Perfect Match**: Hausdorff distance = 0.0m (exact geometry match)\n"
                "• **Threshold Pass**: 0 < Hausdorff ≤ threshold (close enough geometry)\n"
                "• **Failed**: Hausdorff > threshold or other test failures")
 
     # Download section
-    st.subheader("📥 Download Results")
+    st.subheader("Download Results")
 
     if output_files:
         download_entries = _build_download_entries(output_files)
@@ -1824,7 +2029,7 @@ def display_control_results():
 
             # Display CSV downloads
             if csv_entries:
-                st.markdown("### 📄 CSV Data Files")
+                st.markdown("### CSV Data Files")
                 compressed_keys = {'validated_csv_zip', 'failed_observations_csv_zip', 'best_valid_observations_csv_zip', 'missing_observations_csv_zip'}
                 if any(entry['file_type'] in compressed_keys for entry in csv_entries):
                     st.info("Large CSV outputs are compressed for safer downloads. The raw CSV files remain in the output directory.")
@@ -1847,7 +2052,7 @@ def display_control_results():
 
             # Display Shapefile downloads
             if shapefile_entries:
-                st.markdown("### 🗺️ Shapefile Packages")
+                st.markdown("### Shapefile Packages")
                 st.info("Shapefile packages include all required components (.shp, .shx, .dbf, .prj) in ZIP format.")
 
                 shapefile_cols = st.columns(min(3, len(shapefile_entries)))

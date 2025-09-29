@@ -20,6 +20,7 @@ import time
 from .map_a_hourly import HourlyMapInterface
 from .map_b_weekly import WeeklyMapInterface
 from .spatial_data import SpatialDataManager
+from utils.icons import render_title_with_icon, render_header_with_icon, render_subheader_with_icon, render_icon_text, get_icon_for_component
 
 logger = logging.getLogger(__name__)
 
@@ -33,16 +34,16 @@ class MapsPageInterface:
         self.weekly_interface = WeeklyMapInterface()
         
         # Default shapefile path from requirements
-        self.default_shapefile_path = r"E:\google_agg\test_data\google_results_to_golan_17_8_25\google_results_to_golan_17_8_25.shp"
-        
-        # Default results file paths
-        self.default_hourly_path = r"E:\google_agg\test_data\hourly_agg_all.csv"
-        self.default_weekly_path = r"E:\google_agg\test_data\weekly_hourly_profile_all.csv"
+        self.default_shapefile_path = r"E:\google_agg\test_data\aggregation\google_results_to_golan_17_8_25\google_results_to_golan_17_8_25.shp"
+
+        # Default results file paths - now look in output/aggregation directory
+        self.default_hourly_path = r"E:\google_agg\output\aggregation\hourly_agg.csv"
+        self.default_weekly_path = r"E:\google_agg\output\aggregation\weekly_hourly_profile.csv"
     
     def render_maps_page(self) -> None:
         """Render the main Maps page with navigation and file controls."""
         
-        st.title("🗺️ Interactive Map Visualization")
+        render_title_with_icon('maps', 'Interactive Map Visualization')
         st.markdown("Visualize traffic patterns with interactive maps showing hourly and weekly aggregation data")
         
         # Initialize session state for maps
@@ -129,13 +130,13 @@ class MapsPageInterface:
     def _render_file_loading_section(self) -> None:
         """Render file input controls for shapefile and results loading."""
         
-        st.header("📁 Data Loading")
+        render_header_with_icon('file_input', 'Data Loading')
         
         # Create two columns for file inputs
         col_shapefile, col_results = st.columns(2)
         
         with col_shapefile:
-            st.subheader("🗺️ Network Shapefile")
+            render_subheader_with_icon('map_view', 'Network Shapefile')
             
             # Show current shapefile status
             current_shapefile = st.session_state.maps_shapefile_path
@@ -192,7 +193,7 @@ class MapsPageInterface:
                 self._load_shapefile(uploaded_shapefile, shapefile_path_input)
         
         with col_results:
-            st.subheader("📊 Results Data")
+            render_subheader_with_icon('analysis', 'Results Data')
             
             # Show current results status
             if st.session_state.maps_hourly_results is not None:
@@ -399,21 +400,25 @@ class MapsPageInterface:
             if os.path.exists(self.default_weekly_path):
                 found_files['weekly'] = self.default_weekly_path
             
-            # If default paths not found, look for common output directories
+            # If default paths not found, look for aggregation output directories
             if not found_files:
-                possible_dirs = ['./output', './test_output', './exports']
-                
+                possible_dirs = ['./output/aggregation', './output', './test_output', './exports']
+
                 for output_dir in possible_dirs:
                     if os.path.exists(output_dir):
-                        # Look for hourly aggregation file
-                        hourly_file = os.path.join(output_dir, 'hourly_agg.csv')
-                        if os.path.exists(hourly_file):
-                            found_files['hourly'] = hourly_file
-                        
-                        # Look for weekly profile file
-                        weekly_file = os.path.join(output_dir, 'weekly_hourly_profile.csv')
-                        if os.path.exists(weekly_file):
-                            found_files['weekly'] = weekly_file
+                        # For aggregation directory, search in subdirectories
+                        if output_dir == './output/aggregation':
+                            self._search_aggregation_subdirs(output_dir, found_files)
+                        else:
+                            # Look for hourly aggregation file
+                            hourly_file = os.path.join(output_dir, 'hourly_agg.csv')
+                            if os.path.exists(hourly_file):
+                                found_files['hourly'] = hourly_file
+
+                            # Look for weekly profile file
+                            weekly_file = os.path.join(output_dir, 'weekly_hourly_profile.csv')
+                            if os.path.exists(weekly_file):
+                                found_files['weekly'] = weekly_file
             
             if found_files:
                 st.success(f"✅ Found {len(found_files)} results files")
@@ -439,6 +444,40 @@ class MapsPageInterface:
         except Exception as e:
             st.error(f"❌ Error during auto-detection: {str(e)}")
             logger.error(f"Auto-detection error: {e}")
+
+    def _search_aggregation_subdirs(self, agg_dir: str, found_files: dict) -> None:
+        """Search for CSV files in aggregation subdirectories."""
+        try:
+            import os
+            # Get all subdirectories in aggregation output
+            subdirs = [d for d in os.listdir(agg_dir)
+                      if os.path.isdir(os.path.join(agg_dir, d))]
+
+            # Sort subdirectories by modification time (newest first)
+            subdirs.sort(key=lambda x: os.path.getmtime(os.path.join(agg_dir, x)), reverse=True)
+
+            # Search for files in subdirectories
+            for subdir in subdirs:
+                subdir_path = os.path.join(agg_dir, subdir)
+
+                # Look for hourly aggregation file
+                if 'hourly' not in found_files:
+                    hourly_file = os.path.join(subdir_path, 'hourly_agg.csv')
+                    if os.path.exists(hourly_file):
+                        found_files['hourly'] = hourly_file
+
+                # Look for weekly profile file
+                if 'weekly' not in found_files:
+                    weekly_file = os.path.join(subdir_path, 'weekly_hourly_profile.csv')
+                    if os.path.exists(weekly_file):
+                        found_files['weekly'] = weekly_file
+
+                # If we found both files, we can stop searching
+                if len(found_files) >= 2:
+                    break
+
+        except Exception as e:
+            logger.warning(f"Error searching aggregation subdirectories: {e}")
     
     def _preload_default_files(self) -> None:
         """Preload default weekly CSV files and default shapefile if they exist."""
@@ -507,7 +546,7 @@ class MapsPageInterface:
     def _display_data_summary(self) -> None:
         """Display summary of loaded data."""
         
-        st.header("📋 Data Summary")
+        render_header_with_icon('statistics', 'Data Summary')
         
         col1, col2, col3 = st.columns(3)
         
@@ -646,7 +685,7 @@ class MapsPageInterface:
     def _render_map_navigation(self) -> None:
         """Render map navigation tabs with reactive interface and consistent state management."""
         
-        st.header("🗺️ Interactive Maps")
+        render_header_with_icon('maps', 'Interactive Maps')
         
         # Add global reactive controls
         self._render_global_controls()

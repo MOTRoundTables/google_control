@@ -110,6 +110,7 @@ def verify_installation():
 
     critical_packages = [
         "streamlit",
+        "streamlit_option_menu",
         "pandas",
         "geopandas",
         "folium",

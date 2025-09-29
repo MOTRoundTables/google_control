@@ -208,6 +208,7 @@ control_output/
 docs/
 
 # Test data - exclude root CSV files but keep control folder
+!test_data/control/cases/*.csv
 test_data/data.csv
 test_data/data\ copy.csv
 test_data/*.csv

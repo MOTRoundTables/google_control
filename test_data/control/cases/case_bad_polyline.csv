@@ -1,0 +1,2 @@
+﻿DataID,Name,SegmentID,RouteAlternative,RequestedTime,Timestamp,DayInWeek,DayType,Duration (seconds),Distance (meters),Speed (km/h),Url,Polyline
+287044424,s_11430-1321,1187454,1,00:00:00,01/07/2025 00:00,יום ג,יום חול,265,2771,37.643772,https://tdr.mpayer.co.il/external/recording?s=1187454&d=287044424&a=1&du=265,INVALID_POLYLINE
