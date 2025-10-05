@@ -205,7 +205,11 @@ specs/
 
 # Output and generated data
 control_output/
-docs/
+runs/
+
+# Distribution packages (created by distribution scripts)
+distribution_packages/
+*.zip
 
 # Test data - exclude root CSV files but keep control folder
 !test_data/control/cases/*.csv

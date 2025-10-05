@@ -33,7 +33,7 @@ REQUIRED_COLUMNS = [
 COLUMN_MAPPING = {
     'DataID': 'data_id',
     'Name': 'name',  # Used as link_id
-    'SegmentID': 'segment_id', 
+    'SegmentID': 'segment_id',
     'RouteAlternative': 'route_alternative',
     'RequestedTime': 'requested_time',
     'Timestamp': 'timestamp',
@@ -41,6 +41,8 @@ COLUMN_MAPPING = {
     'DayType': 'day_type',
     'Duration': 'duration',
     'Duration (seconds)': 'duration',  # Handle test data format
+    'Static Duration': 'static_duration',  # Optional field
+    'Static Duration (seconds)': 'static_duration',  # Handle test data format
     'Distance': 'distance',
     'Distance (meters)': 'distance',  # Handle test data format
     'Speed': 'speed',
@@ -704,7 +706,7 @@ def optimize_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     # Exclude columns that are used in filtering operations to avoid categorical comparison issues
     exclude_from_categorical = {
         'day_in_week', 'day_type', 'daytype', 'link_id', 'name',
-        'duration', 'distance', 'speed', 'date', 'timestamp',  # Numeric/date columns
+        'duration', 'static_duration', 'distance', 'speed', 'date', 'timestamp',  # Numeric/date columns
         'data_id', 'segment_id', 'route_alternative'  # ID columns that might be filtered
     }
     
@@ -1752,8 +1754,10 @@ def create_hourly_aggregation(df: pd.DataFrame, params: dict) -> pd.DataFrame:
     metric_cols = []
     if 'duration' in df.columns:
         metric_cols.append('duration')
+    if 'static_duration' in df.columns:
+        metric_cols.append('static_duration')
     if 'distance' in df.columns:
-        metric_cols.append('distance') 
+        metric_cols.append('distance')
     if 'speed' in df.columns:
         metric_cols.append('speed')
     
@@ -1793,6 +1797,8 @@ def create_hourly_aggregation(df: pd.DataFrame, params: dict) -> pd.DataFrame:
             
             if 'duration' in metric_cols:
                 valid_agg_dict['duration'] = ['mean', 'std']
+            if 'static_duration' in metric_cols:
+                valid_agg_dict['static_duration'] = ['mean', 'std']
             if 'distance' in metric_cols:
                 valid_agg_dict['distance'] = ['mean']
             if 'speed' in metric_cols:
@@ -1812,6 +1818,10 @@ def create_hourly_aggregation(df: pd.DataFrame, params: dict) -> pd.DataFrame:
                 rename_dict['duration_mean'] = 'avg_duration_sec'
             if 'duration_std' in valid_groups.columns:
                 rename_dict['duration_std'] = 'std_duration_sec'
+            if 'static_duration_mean' in valid_groups.columns:
+                rename_dict['static_duration_mean'] = 'avg_static_duration_sec'
+            if 'static_duration_std' in valid_groups.columns:
+                rename_dict['static_duration_std'] = 'std_static_duration_sec'
             if 'distance_mean' in valid_groups.columns:
                 rename_dict['distance_mean'] = 'avg_distance_m'
             if 'speed_mean' in valid_groups.columns:
@@ -1833,23 +1843,39 @@ def create_hourly_aggregation(df: pd.DataFrame, params: dict) -> pd.DataFrame:
     
     # Ensure all required metric columns exist (set to None for hours with no valid data)
     required_metric_cols = ['avg_duration_sec', 'std_duration_sec', 'avg_distance_m', 'avg_speed_kmh']
+    optional_metric_cols = ['avg_static_duration_sec', 'std_static_duration_sec']
+
     for col in required_metric_cols:
         if col not in hourly_groups.columns:
             hourly_groups[col] = None
-    
+
     # Handle hours with zero valid rows - metrics should be Null but hour kept in output
     zero_valid_mask = hourly_groups['n_valid'] == 0
     if zero_valid_mask.any():
         logger.info(f"Setting metrics to Null for {zero_valid_mask.sum()} hours with zero valid rows")
         for col in required_metric_cols:
             hourly_groups.loc[zero_valid_mask, col] = None
-    
+        # Also set optional static_duration columns to Null if they exist
+        for col in optional_metric_cols:
+            if col in hourly_groups.columns:
+                hourly_groups.loc[zero_valid_mask, col] = None
+
     # Ensure exact column order as specified in requirements
+    # Build column list with static_duration fields right after regular duration
     final_columns = [
-        'link_id', 'date', 'hour_of_day', 'daytype', 
+        'link_id', 'date', 'hour_of_day', 'daytype',
         'n_total', 'n_valid', 'valid_hour', 'no_valid_hour',
-        'avg_duration_sec', 'std_duration_sec', 'avg_distance_m', 'avg_speed_kmh'
+        'avg_duration_sec', 'std_duration_sec'
     ]
+
+    # Add optional static_duration columns right after regular duration
+    if 'avg_static_duration_sec' in hourly_groups.columns:
+        final_columns.append('avg_static_duration_sec')
+    if 'std_static_duration_sec' in hourly_groups.columns:
+        final_columns.append('std_static_duration_sec')
+
+    # Continue with remaining columns
+    final_columns.extend(['avg_distance_m', 'avg_speed_kmh'])
     
     # Reorder columns and ensure all exist
     for col in final_columns:
@@ -2388,20 +2414,35 @@ def write_hourly_aggregation_csv(hourly_df: pd.DataFrame, output_path: str) -> b
         logger.info(f"Writing hourly aggregation CSV to: {output_path}")
         
         # Validate exact column order as specified in requirements
+        # Build column list with static_duration fields right after regular duration
         required_columns = [
-            'link_id', 'date', 'hour_of_day', 'daytype', 
+            'link_id', 'date', 'hour_of_day', 'daytype',
             'n_total', 'n_valid', 'valid_hour', 'no_valid_hour',
-            'avg_duration_sec', 'std_duration_sec', 'avg_distance_m', 'avg_speed_kmh'
+            'avg_duration_sec', 'std_duration_sec'
         ]
-        
-        # Check that all required columns exist
-        missing_cols = [col for col in required_columns if col not in hourly_df.columns]
+
+        # Add optional static_duration columns right after regular duration
+        optional_static_duration = []
+        if 'avg_static_duration_sec' in hourly_df.columns:
+            optional_static_duration.append('avg_static_duration_sec')
+        if 'std_static_duration_sec' in hourly_df.columns:
+            optional_static_duration.append('std_static_duration_sec')
+
+        # Continue with remaining required columns
+        remaining_columns = ['avg_distance_m', 'avg_speed_kmh']
+
+        # Combine all columns in correct order
+        all_columns = required_columns + optional_static_duration + remaining_columns
+
+        # Check that all required columns exist (including remaining columns)
+        all_required = required_columns + remaining_columns
+        missing_cols = [col for col in all_required if col not in hourly_df.columns]
         if missing_cols:
             logger.error(f"Missing required columns in hourly DataFrame: {missing_cols}")
             return False
-        
-        # Create output DataFrame with exact column order
-        output_df = hourly_df[required_columns].copy()
+
+        # Create output DataFrame with exact column order (required + optional)
+        output_df = hourly_df[all_columns].copy()
         
         # Validate data types and handle Null values properly
         # Convert boolean columns to proper format
@@ -2415,6 +2456,12 @@ def write_hourly_aggregation_csv(hourly_df: pd.DataFrame, output_path: str) -> b
         
         # Handle metric columns - keep as float with proper Null handling
         metric_cols = ['avg_duration_sec', 'std_duration_sec', 'avg_distance_m', 'avg_speed_kmh']
+        # Add optional static_duration metrics if they exist
+        if 'avg_static_duration_sec' in output_df.columns:
+            metric_cols.append('avg_static_duration_sec')
+        if 'std_static_duration_sec' in output_df.columns:
+            metric_cols.append('std_static_duration_sec')
+
         for col in metric_cols:
             if col in output_df.columns:
                 output_df[col] = pd.to_numeric(output_df[col], errors='coerce')
@@ -2588,10 +2635,14 @@ def create_weekly_profile(hourly_df: pd.DataFrame, params: dict) -> pd.DataFrame
         'n_valid': ['mean', 'sum'],  # avgnvalid - mean of n_valid values, total_valid_n - sum of n_valid values
         'n_invalid': 'sum',  # total_not_valid - sum of invalid observations
         'avg_duration_sec': 'mean',  # avgdur - mean of avg_duration_sec values
-        'avg_distance_m': 'mean',  # avgdist - mean of avg_distance_m values  
+        'avg_distance_m': 'mean',  # avgdist - mean of avg_distance_m values
         'avg_speed_kmh': 'mean',  # avgspeed - mean of avg_speed_kmh values
         'date': 'nunique'  # n_days - count of distinct dates
     }
+
+    # Add optional static_duration aggregation if column exists
+    if 'avg_static_duration_sec' in valid_hours_df.columns:
+        agg_dict['avg_static_duration_sec'] = 'mean'  # avg_static_dur - mean of avg_static_duration_sec values
     
     # Perform the groupby aggregation
     weekly_groups = valid_hours_df.groupby(groupby_cols).agg(agg_dict).reset_index()
@@ -2600,7 +2651,7 @@ def create_weekly_profile(hourly_df: pd.DataFrame, params: dict) -> pd.DataFrame
     weekly_groups.columns = ['_'.join(col).strip('_') if isinstance(col, tuple) else col for col in weekly_groups.columns]
     
     # Rename columns to match requirements
-    weekly_groups = weekly_groups.rename(columns={
+    rename_dict = {
         'n_valid_mean': 'avg_n_valid',
         'n_valid_sum': 'total_valid_n',
         'n_invalid_sum': 'total_not_valid',
@@ -2608,7 +2659,13 @@ def create_weekly_profile(hourly_df: pd.DataFrame, params: dict) -> pd.DataFrame
         'avg_distance_m_mean': 'avg_dist',
         'avg_speed_kmh_mean': 'avg_speed',
         'date_nunique': 'n_days'
-    })
+    }
+
+    # Add optional static_duration rename if it exists
+    if 'avg_static_duration_sec_mean' in weekly_groups.columns:
+        rename_dict['avg_static_duration_sec_mean'] = 'avg_static_dur'
+
+    weekly_groups = weekly_groups.rename(columns=rename_dict)
     
     # Step 4: Calculate standard deviation based on configuration
     recompute_std_from_raw = params.get('recompute_std_from_raw', False)
@@ -2622,12 +2679,21 @@ def create_weekly_profile(hourly_df: pd.DataFrame, params: dict) -> pd.DataFrame
         if 'std_duration_sec' in valid_hours_df.columns:
             std_groups = valid_hours_df.groupby(groupby_cols)['std_duration_sec'].mean().reset_index()
             std_groups = std_groups.rename(columns={'std_duration_sec': 'std_dur'})
-            
+
             # Merge std_dur back to weekly_groups
             weekly_groups = weekly_groups.merge(std_groups, on=groupby_cols, how='left')
         else:
             logger.warning("std_duration_sec column not found, setting std_dur to None")
             weekly_groups['std_dur'] = None
+
+    # Compute std for static_duration if it exists
+    if 'std_static_duration_sec' in valid_hours_df.columns:
+        logger.info("Computing std_static_dur as mean of hourly std_static_duration_sec values")
+        std_static_groups = valid_hours_df.groupby(groupby_cols)['std_static_duration_sec'].mean().reset_index()
+        std_static_groups = std_static_groups.rename(columns={'std_static_duration_sec': 'std_static_dur'})
+
+        # Merge std_static_dur back to weekly_groups
+        weekly_groups = weekly_groups.merge(std_static_groups, on=groupby_cols, how='left')
     
     # Log weekly profile statistics
     total_profiles = len(weekly_groups)
@@ -2693,18 +2759,28 @@ def write_weekly_hourly_profile_csv(weekly_df: pd.DataFrame, output_path: str) -
         logger.info(f"Writing weekly hourly profile to: {output_path}")
         
         # Ensure proper column order based on grouping type
+        # Put static_duration fields right after regular duration
         if 'weekday_index' in weekly_df.columns:
             # Grouping by weekday_index
             expected_columns = [
-                'link_id', 'weekday_index', 'hour_of_day', 
-                'avg_n_valid', 'total_valid_n', 'total_not_valid', 'avg_dur', 'std_dur', 'avg_dist', 'avg_speed', 'n_days'
+                'link_id', 'weekday_index', 'hour_of_day',
+                'avg_n_valid', 'total_valid_n', 'total_not_valid', 'avg_dur', 'std_dur'
             ]
         else:
             # Grouping by daytype
             expected_columns = [
                 'link_id', 'daytype', 'hour_of_day',
-                'avg_n_valid', 'total_valid_n', 'total_not_valid', 'avg_dur', 'std_dur', 'avg_dist', 'avg_speed', 'n_days'
+                'avg_n_valid', 'total_valid_n', 'total_not_valid', 'avg_dur', 'std_dur'
             ]
+
+        # Add optional static_duration columns right after regular duration
+        if 'avg_static_dur' in weekly_df.columns:
+            expected_columns.append('avg_static_dur')
+        if 'std_static_dur' in weekly_df.columns:
+            expected_columns.append('std_static_dur')
+
+        # Continue with remaining columns
+        expected_columns.extend(['avg_dist', 'avg_speed', 'n_days'])
         
         # Ensure all expected columns exist
         output_df = weekly_df.copy()
@@ -2717,6 +2793,13 @@ def write_weekly_hourly_profile_csv(weekly_df: pd.DataFrame, output_path: str) -
         
         # Handle numeric formatting
         numeric_cols = ['avg_n_valid', 'total_valid_n', 'total_not_valid', 'avg_dur', 'std_dur', 'avg_dist', 'avg_speed']
+
+        # Add optional static_duration numeric columns if they exist
+        if 'avg_static_dur' in output_df.columns:
+            numeric_cols.append('avg_static_dur')
+        if 'std_static_dur' in output_df.columns:
+            numeric_cols.append('std_static_dur')
+
         for col in numeric_cols:
             if col in output_df.columns:
                 # Convert to appropriate type and handle None/NaN values

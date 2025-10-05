@@ -26,6 +26,7 @@ from .report import (
     extract_missing_observations,
     extract_no_data_links,
     create_failed_observations_shapefile,
+    create_failed_observations_unique_polylines_shapefile,
     create_csv_matching_shapefile,
     _parse_timestamp_series,
     calculate_expected_observations,
@@ -117,7 +118,7 @@ def control_page():
         # Output directory
         raw_output_dir = st.text_input(
             "Output directory",
-            value="./output/control",
+            value="runs/1_10_25/output/control",
             help="Directory where validation results and reports will be saved"
         )
 
@@ -1054,6 +1055,37 @@ def save_validation_results(result_df, report_gdf, output_dir, generate_shapefil
                     status_callback(f"❌ Failed to create failed observations shapefile: {e}")
                 try:
                     failed_shp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+            # Create unique polylines shapefile (deduplicates by timestamp + name + geometry)
+            if status_callback:
+                status_callback("🗺️ Creating unique polylines shapefile...")
+
+            failed_unique_shp_path = Path(output_dir) / "failed_observations_unique_polylines.shp"
+            try:
+                create_failed_observations_unique_polylines_shapefile(
+                    validation_failed_df,
+                    report_gdf,
+                    str(failed_unique_shp_path)
+                )
+                update_progress()
+                if status_callback:
+                    file_size_mb = failed_unique_shp_path.stat().st_size / (1024 * 1024)
+                    status_callback(f"✅ Created unique polylines shapefile ({file_size_mb:.1f}MB)")
+
+                failed_unique_shapefile_zip_path = create_shapefile_zip_package(str(failed_unique_shp_path), output_dir, compresslevel=zip_compresslevel)
+                output_files['failed_observations_unique_polylines_zip'] = str(failed_unique_shapefile_zip_path)
+                update_progress()
+                if status_callback:
+                    zip_size_mb = Path(failed_unique_shapefile_zip_path).stat().st_size / (1024 * 1024)
+                    status_callback(f"✅ Packaged unique polylines shapefile ({zip_size_mb:.1f}MB)")
+            except Exception as e:
+                print(f"Warning: Failed to create unique polylines shapefile: {e}")
+                if status_callback:
+                    status_callback(f"⚠️ Failed to create unique polylines shapefile: {e}")
+                try:
+                    failed_unique_shp_path.unlink(missing_ok=True)
                 except Exception:
                     pass
 

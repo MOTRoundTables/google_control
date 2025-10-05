@@ -99,6 +99,38 @@ The per‑row output keeps your original fields and adds: `is_valid`, `valid_cod
 
 ## 5) Outputs (file list & meaning)
 
+### Output folder structure
+
+All control validation outputs are saved in **timestamped folders** with the format `DD_MM_YY_HH_MM`:
+
+```
+runs/
+└── 1_10_25/                    # Run batch identifier
+    └── output/
+        ├── control/            # Control validation outputs
+        │   ├── 05_10_25_16_36/ # Timestamped folder (5 Oct 2025, 16:36)
+        │   │   ├── validated_data.csv
+        │   │   ├── link_report.csv
+        │   │   ├── failed_observations.csv
+        │   │   ├── best_valid_observations.csv
+        │   │   ├── failed_observations_shapefile.zip
+        │   │   ├── failed_observations_unique_polylines_shapefile.zip
+        │   │   └── performance_and_parameters_log.txt
+        │   ├── 05_10_25_18_51/ # Another run
+        │   └── ...
+        │
+        └── aggregation/        # Aggregation outputs (linked to control)
+            ├── from_control_05_10_25_16_36/ # Traced to control folder
+            ├── from_control_05_10_25_18_51/
+            └── ...
+```
+
+**Key points:**
+- **Timestamped folders**: Each validation run creates a new folder with timestamp `DD_MM_YY_HH_MM`
+- **Traceability**: Aggregation folders use `from_control_[timestamp]` naming to link back to the control run
+- **Multiple versions**: You can have multiple control and aggregation runs side-by-side
+- **Log file**: `performance_and_parameters_log.txt` contains run metadata including the timestamp
+
 ### Core CSVs (always written)
 - **validated_data.csv** — every row with test results and codes; sorted by Name → Timestamp → RouteAlternative when present
 - **link_report.csv** — per‑link aggregation with clear fields (see below)
@@ -116,12 +148,13 @@ The per‑row output keeps your original fields and adds: `is_valid`, `valid_cod
 - **missing_observations.csv** — expected `(RequestedTime + Date)` combinations that are **missing** for links that do have some data (**code 94**)
 
 **Optional shapefiles (when spatial export is toggled):**
-- **failed_observations_shapefile.zip** — failed rows using **decoded polylines**
-- **failed_observations_reference_shapefile.zip** — failure counts by time‑period on **reference geometries**
+- **failed_observations_shapefile.zip** — all failed rows using **decoded polylines** (see §12.1)
+- **failed_observations_unique_polylines_shapefile.zip** — **unique route geometries per link** (deduplicated across all timestamps by Name+Polyline, see §12.2)
+- **failed_observations_reference_shapefile.zip** — failure counts by time‑period on **reference geometries** (see §12.3)
 - **missing_observations_shapefile.zip** — missing observations on **reference geometries**
 - **no_data_links_shapefile.zip** — no‑data links on **reference geometries**
 
-> **Note:** Large CSVs may also be provided as ZIPs alongside the raw files.
+> **Note:** Large CSVs may also be provided as ZIPs alongside the raw files. See **§12** for detailed shapefile specifications and deduplication logic.
 
 ---
 
@@ -179,8 +212,8 @@ The per‑row output keeps your original fields and adds: `is_valid`, `valid_cod
 
 ## 10) File names (output directory)
 
-- CSV: `validated_data.csv`, `best_valid_observations.csv`, `failed_observations.csv`, `missing_observations.csv`, `no_data_links.csv`, `link_report.csv`  
-- Shapefile ZIPs: `link_report_shapefile.zip`, `failed_observations_shapefile.zip`, `failed_observations_reference_shapefile.zip`, `missing_observations_shapefile.zip`, `no_data_links_shapefile.zip`
+- CSV: `validated_data.csv`, `best_valid_observations.csv`, `failed_observations.csv`, `missing_observations.csv`, `no_data_links.csv`, `link_report.csv`
+- Shapefile ZIPs: `link_report_shapefile.zip`, `failed_observations_shapefile.zip`, `failed_observations_unique_polylines_shapefile.zip`, `failed_observations_reference_shapefile.zip`, `missing_observations_shapefile.zip`, `no_data_links_shapefile.zip`
 
 ---
 
@@ -272,14 +305,92 @@ All shapefiles are written as **LineString** layers by default, with CRS set to 
 | Shapefile ZIP | Geometry source | Geometry type | CRS on disk | Notes |
 | --- | --- | --- | --- | --- |
 | link_report_shapefile.zip | Reference shapefile | LineString | Reference CRS (e.g., EPSG:2039) | Attributes mirror link_report.csv and field order is the same |
-| failed_observations_shapefile.zip | **Decoded polylines** from CSV | LineString | Reference CRS (reprojected from WGS84) | One row per failed observation; geometry equals the observed route |
-| failed_observations_reference_shapefile.zip | **Reference** geometry | LineString | Reference CRS | Aggregated by link and time periods; shows failure patterns on the expected geometry |
+| failed_observations_shapefile.zip | **Decoded polylines** from CSV | LineString | Reference CRS (reprojected from WGS84) | One row per failed observation; geometry equals the observed route (see §12.1) |
+| failed_observations_unique_polylines_shapefile.zip | **Decoded polylines** from CSV (deduplicated) | LineString | Reference CRS (reprojected from WGS84) | Unique polylines only - deduplicated by Timestamp+Name+Polyline string (see §12.2) |
+| failed_observations_reference_shapefile.zip | **Reference** geometry | LineString | Reference CRS | Aggregated by link and time periods; shows failure patterns on the expected geometry (see §12.3) |
 | missing_observations_shapefile.zip | **Reference** geometry | LineString | Reference CRS | Produced only when completeness is enabled |
 | no_data_links_shapefile.zip | **Reference** geometry | LineString | Reference CRS | One row per link that had zero observations |
 
 DBF note: field names are trimmed to ≤ 10 characters in the shapefile, but the **column order** matches the CSVs. Keep the CSVs as the authoritative schemas.
 
-### 12.1) Failed observations reference shapefile time-period aggregation
+### 12.1) Failed observations shapefile (decoded polylines - all observations)
+
+The **failed_observations_shapefile.zip** contains **all failed validation observations** with their actual Google Maps polyline geometries decoded and reprojected.
+
+**Purpose:**
+- Visualize every failed observation with its actual observed route
+- Compare observed routes against reference geometry
+- Analyze spatial patterns of validation failures
+
+**Characteristics:**
+- **One row per failed observation** (codes 1-3 with `is_valid=False`)
+- **Geometry source**: Decoded from `Polyline` column in CSV using Google Maps polyline encoding
+- **Coordinate transformation**: Decoded in EPSG:4326 (WGS84) → reprojected to reference CRS
+- **Attributes**: All columns from `failed_observations.csv` including validation codes, Hausdorff distances, route alternatives
+
+**Typical use cases:**
+- Visual inspection of why specific observations failed
+- Route alternative comparison for multi-route timestamps
+- Quality control and validation debugging
+
+**Example counts:**
+- Input: 5,060 failed observations
+- Output: 5,060 polyline features (one per observation)
+
+### 12.2) Failed observations unique polylines shapefile (deduplicated)
+
+The **failed_observations_unique_polylines_shapefile.zip** provides a **deduplicated version** of the failed observations, keeping only unique route geometries per link across all timestamps.
+
+**Purpose:**
+- Show unique route variations without temporal repetition
+- Reduce file size dramatically (e.g., 5,060 → 60 features)
+- Focus on spatial route diversity rather than observation counts
+- Ideal for route pattern analysis and alternative path visualization
+
+**Deduplication logic:**
+1. **Group by**: `(Name + Polyline string)` — **link + route geometry only, ignoring timestamps**
+2. **Keep**: First occurrence of each unique (link, route) combination
+3. **Result**: One feature per unique route geometry for each link, **regardless of when it was observed**
+
+**Characteristics:**
+- **Geometry source**: Same as §12.1 (decoded polylines from failed observations)
+- **Deduplication basis**: Link name + original encoded polyline string (before decoding)
+- **Attributes**: Preserved from first temporal occurrence of each unique route
+- **Time independence**: If the same route appears at 100 different timestamps → output contains 1 feature
+- **Route alternatives**: If a link has multiple route alternatives with different geometries → all unique routes are kept
+
+**Important notes:**
+- **Multiple routes per link is normal**: Links can have 1-3 route alternatives (different paths for the same origin-destination)
+- **Not an error indicator**: Having multiple routes doesn't mean the link is "broken" — it's just Google Maps finding alternative paths
+- **Distribution varies**: Some links may have 1 route, others 2-3 routes, depending on road network topology
+- **Total count**: Represents total unique failed route geometries across all links (not per-link counts)
+
+**Example scenario:**
+```
+Link s_1119-9150 observed 394 times across all timestamps:
+- 384 observations: Polyline "abc123..." (route A) at various times
+- 10 observations: Polyline "xyz789..." (route B) at various times
+
+Result: 2 features output (one for route A, one for route B)
+
+Link s_1753-3930 observed 15 times:
+- All 15 observations: Polyline "def456..." (single route)
+
+Result: 1 feature output (only one unique route for this link)
+```
+
+**Typical use cases:**
+- Route alternative catalog per link
+- Visual comparison of different paths between same origin-destination
+- Cleaner maps showing route diversity without time-based clutter
+- Understanding spatial variation in failed routes across the network
+
+**Example counts:**
+- Input: 5,060 failed observations (same routes repeated across timestamps)
+- Output: 60 unique route geometries across all links (5,000 temporal duplicates removed)
+- Interpretation: 60 distinct failed route patterns exist in the dataset, regardless of how many times each was observed
+
+### 12.3) Failed observations reference shapefile (time-period aggregation)
 
 The **failed_observations_reference_shapefile.zip** provides time-of-day failure pattern analysis with one row per unique link and aggregated failure counts across time periods.
 

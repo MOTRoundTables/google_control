@@ -28,6 +28,7 @@ The pipeline handles millions of rows efficiently through chunked processing, ti
 - **SegmentID**, **RouteAlternative** — Routing metadata
 - **Url**, **Polyline** — Google Maps metadata
 - **is_valid** — Pre-validated data flag
+- **Static Duration (seconds)** — Static travel time estimate (if available, will be aggregated)
 
 ### Data formats
 - **Encoding**: UTF-8, CP1255 (Hebrew), auto-detected
@@ -145,15 +146,27 @@ One row per link-date-hour combination with traffic metrics.
 | date | date | Calendar date (YYYY-MM-DD) |
 | hour_of_day | int | Hour 0-23 |
 | daytype | string | Day classification (חול/שבת/חג) |
-| n_total | int | Total observations |
-| n_valid | int | Valid observations |
-| avg_duration_sec | float | Average duration in seconds |
-| std_duration_sec | float | Duration standard deviation |
-| min_duration_sec | float | Minimum duration |
-| max_duration_sec | float | Maximum duration |
-| avg_distance_m | float | Average distance in meters |
-| avg_speed_kmh | float | Average speed in km/h |
-| data_quality_flag | int | Quality indicator (0=good) |
+| n_total | int | Total observations for this hour |
+| n_valid | int | Valid observations for this hour |
+| valid_hour | bool | True if n_valid >= min_valid_per_hour threshold |
+| no_valid_hour | int | 1 if hour is invalid (inverse of valid_hour), 0 if valid |
+| avg_duration_sec | float | Average duration in seconds (NULL if n_valid = 0) |
+| std_duration_sec | float | Duration standard deviation (NULL if n_valid = 0) |
+| avg_static_duration_sec | float | Average static duration (optional, NULL if field not in input or n_valid = 0) |
+| std_static_duration_sec | float | Static duration std dev (optional, NULL if field not in input or n_valid = 0) |
+| avg_distance_m | float | Average distance in meters (NULL if n_valid = 0) |
+| avg_speed_kmh | float | Average speed in km/h (NULL if n_valid = 0) |
+
+**Null Handling for Hours with No Valid Data:**
+- If an hour has `n_valid = 0` (no valid observations), the row will still exist with:
+  - `n_total` = number of total observations (could be > 0)
+  - `n_valid` = 0
+  - `valid_hour` = False (0)
+  - `no_valid_hour` = 1
+  - `avg_duration_sec` = NULL/None
+  - `std_duration_sec` = NULL/None
+  - `avg_static_duration_sec` = NULL/None (if field exists)
+  - All other metrics = NULL/None
 
 #### weekly_hourly_profile.csv
 One row per link-daytype-hour showing typical patterns.
@@ -163,16 +176,21 @@ One row per link-daytype-hour showing typical patterns.
 | link_id | string | Link identifier |
 | daytype | string | Day type (חול/שבת/חג) |
 | hour_of_day | int | Hour 0-23 |
-| avg_n_total | float | Average total observations |
-| avg_n_valid | float | Average valid observations |
+| avg_n_valid | float | Average number of valid observations per hour |
+| total_valid_n | int | Total valid observations across all days |
+| total_not_valid | int | Total invalid observations across all days |
 | avg_dur | float | Typical duration (seconds) |
 | std_dur | float | Typical duration variability |
-| min_dur | float | Minimum typical duration |
-| max_dur | float | Maximum typical duration |
+| avg_static_dur | float | Typical static duration (optional, only if field in input) |
+| std_static_dur | float | Static duration variability (optional, only if field in input) |
 | avg_dist | float | Typical distance (meters) |
 | avg_speed | float | Typical speed (km/h) |
 | n_days | int | Number of days analyzed |
-| coverage | float | Data completeness (0-1) |
+
+**Null Handling for Weekly Profile:**
+- Weekly profile **only includes hours where `valid_hour = True`**
+- Hours with no valid data (`n_valid = 0`) are **excluded** from the weekly file
+- This ensures weekly patterns are based on reliable data only
 
 ### Supporting outputs
 

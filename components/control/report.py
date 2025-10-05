@@ -1435,6 +1435,98 @@ def create_failed_observations_shapefile(
     )
 
 
+def create_failed_observations_unique_polylines_shapefile(
+    failed_observations_df: pd.DataFrame,
+    shapefile_gdf: gpd.GeoDataFrame,
+    output_path: str
+) -> None:
+    """
+    Create a shapefile for failed observations with UNIQUE polylines only.
+
+    Deduplicates by (Timestamp/RequestedTime + Name + decoded polyline geometry).
+    This reduces redundant features when multiple route alternatives have identical geometries.
+
+    Example: If a link has 350 observations with only 20 unique geometries, this outputs 20 features.
+
+    Args:
+        failed_observations_df: DataFrame with failed validation results
+        shapefile_gdf: Reference shapefile (used for CRS)
+        output_path: Path for output shapefile
+    """
+    if failed_observations_df.empty:
+        print(f"Warning: No failed observations to create unique polylines shapefile: {output_path}")
+        return
+
+    import polyline as polyline_lib
+    from shapely.geometry import LineString
+
+    df = failed_observations_df.copy()
+
+    # Standardize column names
+    name_col = 'Name' if 'Name' in df.columns else 'name'
+    timestamp_col = 'Timestamp' if 'Timestamp' in df.columns else 'timestamp'
+    requested_time_col = 'RequestedTime' if 'RequestedTime' in df.columns else 'requested_time'
+    polyline_col = 'Polyline' if 'Polyline' in df.columns else 'polyline'
+
+    # Use Timestamp first, fall back to RequestedTime
+    time_col = timestamp_col if timestamp_col in df.columns else requested_time_col
+
+    if name_col not in df.columns or polyline_col not in df.columns:
+        print(f"Warning: Missing required columns for unique polylines shapefile")
+        return
+
+    # DEDUPLICATE by Name (link) + polyline string
+    # Keep only unique route geometries per link, regardless of timestamp
+    initial_count = len(df)
+    df_unique = df.drop_duplicates(subset=[name_col, polyline_col], keep='first')
+    removed_count = initial_count - len(df_unique)
+
+    df = df_unique
+
+    print(f"  Deduplication: {initial_count} total rows -> {len(df)} unique routes per link ({removed_count} duplicates removed)")
+
+    # Decode polylines and create geometries
+    geometries = []
+    valid_rows = []
+
+    for idx, row in df.iterrows():
+        try:
+            polyline_str = row[polyline_col]
+            if pd.isna(polyline_str) or polyline_str == '':
+                continue
+
+            # Decode polyline (returns [(lat, lon), ...])
+            coords = polyline_lib.decode(polyline_str)
+
+            # Convert to (lon, lat) for shapely and create LineString
+            if len(coords) >= 2:
+                geom = LineString([(lon, lat) for lat, lon in coords])
+                geometries.append(geom)
+                valid_rows.append(row)
+        except Exception as e:
+            # Skip invalid polylines
+            continue
+
+    if not valid_rows:
+        print(f"Warning: No valid polylines decoded for unique polylines shapefile")
+        return
+
+    # Create GeoDataFrame with decoded geometries (already deduplicated)
+    valid_df = pd.DataFrame(valid_rows)
+    gdf_unique = gpd.GeoDataFrame(valid_df, geometry=geometries, crs='EPSG:4326')
+
+    # Convert to same CRS as reference shapefile
+    if shapefile_gdf.crs:
+        gdf_unique = gdf_unique.to_crs(shapefile_gdf.crs)
+
+    # Write shapefile
+    try:
+        gdf_unique.to_file(output_path, driver='ESRI Shapefile')
+        print(f"  Created unique polylines shapefile: {output_path}")
+    except Exception as e:
+        print(f"  Error writing unique polylines shapefile: {e}")
+
+
 def create_failed_observations_reference_shapefile(
     failed_observations_df: pd.DataFrame,
     shapefile_gdf: gpd.GeoDataFrame,

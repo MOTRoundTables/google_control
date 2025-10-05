@@ -406,7 +406,7 @@ def main_processing_page():
         uploaded_file = st.file_uploader(
             "Upload CSV file containing Google Maps link monitoring data",
             type=['csv'],
-            help="Select a CSV file with the required columns: DataID, Name, SegmentID, RouteAlternative, RequestedTime, Timestamp, DayInWeek, DayType, Duration, Distance, Speed, Url, Polyline"
+            help="Select a CSV file with the required columns"
         )
 
         # Automatic folder detection for control output files
@@ -414,58 +414,65 @@ def main_processing_page():
         if uploaded_file is not None:
             file_name = uploaded_file.name
             if any(keyword in file_name.lower() for keyword in ['best_valid', 'failed_observations', 'validated_data']):
-                st.info("💡 **Control output file detected!** Automatic folder extraction will be used.")
+                st.info("💡 **Control output file detected!**")
 
-                # Try to extract folder from recent control results in session state
-                extracted_folder = None
+                # Ask for log file to auto-extract timestamp
+                st.markdown("**Upload the log file to auto-detect folder timestamp:**")
+                log_file = st.file_uploader(
+                    "Upload performance_and_parameters_log.txt",
+                    type=['txt', 'log'],
+                    help="Upload the log file from the same control output folder",
+                    key="log_file_uploader"
+                )
 
-                # Method 1: Check session state for recent control results
-                if 'control_results' in st.session_state and st.session_state.control_results.get('success'):
-                    control_output_files = st.session_state.control_results.get('output_files', {})
-                    if control_output_files:
-                        try:
-                            sample_path = next(iter(control_output_files.values()))
-                            extracted_folder = Path(sample_path).parent.name
-                            st.success(f"✅ **Auto-detected from session:** `{extracted_folder}`")
-                        except Exception:
-                            pass
-
-                # Method 2: Look for pattern in filename itself
-                if not extracted_folder:
-                    import re
-                    timestamp_pattern = r'(\d{2}_\d{2}_\d{2}_\d{2}_\d{2})'
-                    match = re.search(timestamp_pattern, file_name)
-                    if match:
-                        extracted_folder = match.group(1)
-                        st.success(f"✅ **Auto-detected from filename:** `{extracted_folder}`")
-
-                # Method 3: Check recent control output directories
-                if not extracted_folder:
+                if log_file:
                     try:
-                        control_output_base = Path('./output/control')
-                        if control_output_base.exists():
-                            # Get the most recent directory
-                            subdirs = [d for d in control_output_base.iterdir() if d.is_dir()]
-                            if subdirs:
-                                most_recent = max(subdirs, key=lambda x: x.stat().st_mtime)
-                                extracted_folder = most_recent.name
-                                st.success(f"✅ **Auto-detected from recent control run:** `{extracted_folder}`")
-                    except Exception:
-                        pass
+                        # Read log file content
+                        log_content = log_file.read().decode('utf-8')
 
-                # Show final result
-                if extracted_folder:
-                    output_folder = f"from_control_{extracted_folder}"
-                    st.info(f"📁 **Aggregation will be saved to:** `./output/aggregation/{output_folder}/`")
-                    extracted_folder_info = extracted_folder
-                else:
-                    st.warning("⚠️ Could not auto-detect source folder. Will use timestamp-based folder.")
+                        # Extract date and time from log
+                        import re
+                        date_match = re.search(r'Run Date:\s*(\d{4})-(\d{2})-(\d{2})', log_content)
+                        time_match = re.search(r'Start Time:\s*(\d{2}):(\d{2}):(\d{2})', log_content)
+
+                        if date_match and time_match:
+                            year, month, day = date_match.groups()
+                            hour, minute, second = time_match.groups()
+
+                            # Format as DD_MM_YY_HH_MM
+                            timestamp = f"{day}_{month}_{year[2:]}_{hour}_{minute}"
+                            extracted_folder_info = timestamp
+                            st.success(f"✅ **Auto-detected timestamp from log:** `{timestamp}`")
+                            st.success(f"✅ **Output folder:** `from_control_{timestamp}`")
+                        else:
+                            st.warning("⚠️ Could not extract timestamp from log file. Please enter manually below.")
+                    except Exception as e:
+                        st.error(f"❌ Error reading log file: {e}")
+
+                # Manual input fallback
+                if not extracted_folder_info:
+                    st.markdown("**OR enter timestamp manually:**")
+                    control_folder = st.text_input(
+                        "Control folder timestamp (e.g., 05_10_25_16_36)",
+                        help="Enter the timestamp from your control output folder path",
+                        placeholder="DD_MM_YY_HH_MM",
+                        key="control_folder_input"
+                    )
+
+                    if control_folder:
+                        import re
+                        if re.match(r'\d{2}_\d{2}_\d{2}_\d{2}_\d{2}', control_folder):
+                            extracted_folder_info = control_folder
+                            st.success(f"✅ **Output folder:** `from_control_{control_folder}`")
+                        else:
+                            st.error("❌ Invalid format. Use DD_MM_YY_HH_MM (e.g., 05_10_25_16_36)")
+                            extracted_folder_info = None
         
         # Output Directory Section
         st.markdown("#### 📂 Output Directory")
         output_dir = st.text_input(
             "Output directory path",
-            value="./output/aggregation",
+            value="runs/1_10_25/output/aggregation",
             help="Directory where processed files will be saved. Will be created if it doesn't exist."
         )
         
@@ -1185,7 +1192,9 @@ def prepare_processing_parameters(config: dict) -> dict:
         # If it's from control output, use automatic detection
         if 'best_valid_observations' in base_name or 'failed_observations' in base_name or 'validated_data' in base_name:
             # Check if we have extracted folder info from the UI
-            extracted_folder_info = config.get('extracted_folder_info', '').strip()
+            extracted_folder_info = config.get('extracted_folder_info')
+            if extracted_folder_info:
+                extracted_folder_info = extracted_folder_info.strip()
 
             if extracted_folder_info:
                 # Use the automatically detected folder

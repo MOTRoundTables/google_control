@@ -33,12 +33,7 @@ class MapsPageInterface:
         self.hourly_interface = HourlyMapInterface()
         self.weekly_interface = WeeklyMapInterface()
         
-        # Default shapefile path from requirements
-        self.default_shapefile_path = r"E:\google_agg\test_data\aggregation\google_results_to_golan_17_8_25\google_results_to_golan_17_8_25.shp"
-
-        # Default results file paths - now look in output/aggregation directory
-        self.default_hourly_path = r"E:\google_agg\output\aggregation\hourly_agg.csv"
-        self.default_weekly_path = r"E:\google_agg\output\aggregation\weekly_hourly_profile.csv"
+        # No default paths - all files must be uploaded
     
     def render_maps_page(self) -> None:
         """Render the main Maps page with navigation and file controls."""
@@ -67,7 +62,7 @@ class MapsPageInterface:
         
         # File paths
         if 'maps_shapefile_path' not in st.session_state:
-            st.session_state.maps_shapefile_path = self.default_shapefile_path
+            st.session_state.maps_shapefile_path = None
         
         if 'maps_results_path' not in st.session_state:
             st.session_state.maps_results_path = ""
@@ -143,30 +138,20 @@ class MapsPageInterface:
 
         with col_shapefile:
             st.markdown("#### 🗺️ Network Shapefile")
-            
+
             # Show current shapefile status
             current_shapefile = st.session_state.maps_shapefile_path
             if current_shapefile and os.path.exists(current_shapefile):
                 st.success(f"✅ Shapefile loaded: {os.path.basename(current_shapefile)}")
             else:
-                st.warning("⚠️ Default shapefile not found")
-            
-            # File uploader for shapefile (limited functionality due to multi-file requirements)
-            st.info("ℹ️ **Shapefile Upload Note**: Shapefiles require multiple files (.shp, .shx, .dbf, .prj). Upload only works if all files are available. For best results, use the file path selector below.")
+                st.info("📤 Please upload a shapefile ZIP below")
+
+            # File uploader for shapefile ZIP
             uploaded_shapefile = st.file_uploader(
-                "Upload shapefile (.shp) - Limited support",
-                type=['shp'],
-                help="⚠️ Shapefile upload may fail if companion files (.shx, .dbf, .prj) are missing. Use file path selector below for full functionality.",
-                key="shapefile_uploader",
-                disabled=False
-            )
-            
-            # Path input for shapefile
-            shapefile_path_input = st.text_input(
-                "Enter shapefile path (optional):",
-                value=current_shapefile,
-                help="Enter full path to shapefile. Leave empty to use default.",
-                key="shapefile_path_input"
+                "Upload shapefile ZIP",
+                type=['zip'],
+                help="Upload a ZIP file containing all shapefile components (.shp, .shx, .dbf, .prj)",
+                key="shapefile_uploader"
             )
             
             # Add helpful guidance
@@ -195,8 +180,8 @@ class MapsPageInterface:
                 """)
             
             # Load shapefile button
-            if st.button("🔄 Load Shapefile", key="load_shapefile_btn"):
-                self._load_shapefile(uploaded_shapefile, shapefile_path_input)
+            if st.button("🔄 Load Shapefile", key="load_shapefile_btn", disabled=(uploaded_shapefile is None)):
+                self._load_shapefile(uploaded_shapefile)
         
         with col_results:
             st.markdown("#### 📊 Results Data")
@@ -241,62 +226,67 @@ class MapsPageInterface:
         if self._check_data_availability():
             self._display_data_summary()
     
-    def _load_shapefile(self, uploaded_file: Optional[st.runtime.uploaded_file_manager.UploadedFile], 
-                       file_path: str) -> None:
-        """Load shapefile from upload or file path."""
-        
+    def _load_shapefile(self, uploaded_file: Optional[st.runtime.uploaded_file_manager.UploadedFile]) -> None:
+        """Load shapefile from uploaded ZIP file."""
+
         try:
-            shapefile_data = None
-            
             if uploaded_file is not None:
-                st.error("❌ Shapefile upload from browser is not supported due to multi-file requirements (.shp, .shx, .dbf, .prj)")
-                st.info("💡 Please use the file path input below to specify the full path to your shapefile")
-                return
-                    
-            elif file_path and os.path.exists(file_path):
-                # Set GDAL configuration for shapefile restoration
-                os.environ['SHAPE_RESTORE_SHX'] = 'YES'
-                
-                try:
-                    # Load from file path
-                    shapefile_data = self.spatial_manager.load_shapefile(file_path)
-                    st.session_state.maps_shapefile_path = file_path
-                except Exception as e:
-                    st.error(f"❌ Error loading shapefile: {str(e)}")
-                    st.info("💡 Try the following solutions:")
-                    st.info("• Ensure all shapefile components (.shp, .shx, .dbf, .prj) are in the same directory")
-                    st.info("• Check that the file path is correct and accessible")
-                    st.info("• Verify the shapefile is not corrupted")
+                # Check if it's a ZIP file
+                if uploaded_file.name.endswith('.zip'):
+                    import tempfile
+                    import zipfile
+
+                    # Create temp directory for extraction
+                    with tempfile.TemporaryDirectory() as temp_dir:
+                        temp_path = Path(temp_dir)
+                        zip_path = temp_path / uploaded_file.name
+
+                        # Save uploaded ZIP
+                        with open(zip_path, 'wb') as f:
+                            f.write(uploaded_file.getvalue())
+
+                        # Extract ZIP
+                        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                            zip_ref.extractall(temp_path)
+
+                        # Find .shp file
+                        shp_files = list(temp_path.glob('**/*.shp'))
+                        if not shp_files:
+                            st.error("❌ No .shp file found in ZIP")
+                            return
+
+                        shapefile_path = str(shp_files[0])
+
+                        try:
+                            # Load shapefile data INSIDE temp directory context
+                            shapefile_data = self.spatial_manager.load_shapefile(shapefile_path)
+
+                            # Validate schema
+                            is_valid, missing_fields = self.spatial_manager.validate_shapefile_schema(shapefile_data)
+
+                            if is_valid:
+                                # Handle column name variations (id vs Id)
+                                if 'id' in shapefile_data.columns and 'Id' not in shapefile_data.columns:
+                                    shapefile_data = shapefile_data.rename(columns={'id': 'Id'})
+
+                                # Store the GeoDataFrame directly (not the path, since temp dir will be deleted)
+                                st.session_state.maps_shapefile_data = shapefile_data
+                                st.session_state.maps_shapefile_path = uploaded_file.name  # Just store filename for display
+                                st.success(f"✅ Loaded shapefile from ZIP: {uploaded_file.name} ({len(shapefile_data):,} features)")
+                            else:
+                                st.error(f"❌ Shapefile missing required columns: {', '.join(missing_fields)}")
+                                st.info("Required columns: Id, From, To (case-sensitive)")
+                                return
+
+                        except Exception as e:
+                            st.error(f"❌ Error loading shapefile from ZIP: {str(e)}")
+                            return
+                else:
+                    st.error("❌ Shapefile upload requires a ZIP file containing .shp, .shx, .dbf, and .prj files")
                     return
             else:
-                st.error("❌ Please provide a valid shapefile upload or file path")
+                st.error("❌ Please upload a shapefile ZIP file")
                 return
-            
-            if shapefile_data is not None and not shapefile_data.empty:
-                # Validate shapefile schema
-                is_valid, missing_fields = self.spatial_manager.validate_shapefile_schema(shapefile_data)
-                
-                if is_valid:
-                    # Handle column name variations (id vs Id)
-                    if 'id' in shapefile_data.columns and 'Id' not in shapefile_data.columns:
-                        shapefile_data = shapefile_data.rename(columns={'id': 'Id'})
-                    
-                    # Reproject to EPSG 2039 if needed
-                    shapefile_data = self.spatial_manager.reproject_to_epsg2039(shapefile_data)
-                    
-                    # Store in session state
-                    st.session_state.maps_shapefile_data = shapefile_data
-                    
-                    st.success(f"✅ Shapefile loaded successfully: {len(shapefile_data)} features")
-                    st.info(f"📍 CRS: {shapefile_data.crs}")
-                    
-                    # Show sample data
-                    with st.expander("📋 Shapefile Preview", expanded=False):
-                        st.dataframe(shapefile_data.head().drop(columns=['geometry']))
-                else:
-                    st.error(f"❌ Invalid shapefile schema. Missing fields: {', '.join(missing_fields)}")
-            else:
-                st.error("❌ Failed to load shapefile or file is empty")
                 
         except Exception as e:
             st.error(f"❌ Error loading shapefile: {str(e)}")
