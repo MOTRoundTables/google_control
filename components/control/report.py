@@ -1161,9 +1161,11 @@ def extract_missing_observations(
             if 'Timestamp' in link_df.columns or 'timestamp' in link_df.columns:
                 timestamp_col = 'Timestamp' if 'Timestamp' in link_df.columns else 'timestamp'
 
-                # Parse timestamp dates to compare
+                # Parse timestamp dates to compare (use ISO8601 priority, not dayfirst)
                 try:
-                    timestamp_dates = pd.to_datetime(link_df[timestamp_col], errors='coerce', dayfirst=True).dt.date
+                    # Use _parse_timestamp_series for consistent date parsing
+                    parsed_timestamps = _parse_timestamp_series(link_df[timestamp_col])
+                    timestamp_dates = parsed_timestamps.dt.date
                     date_matches = timestamp_dates == expected_date
 
                     # Find rows that match both time and date
