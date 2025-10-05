@@ -51,19 +51,21 @@ def _parse_timestamp_series(series: pd.Series) -> pd.Series:
     if pd.api.types.is_datetime64_any_dtype(series):
         return series
 
-    parsed = pd.to_datetime(series, errors='coerce', dayfirst=True)
+    # Try ISO format first (YYYY-MM-DD) - most common in programmatic data
+    parsed = pd.to_datetime(series, errors='coerce', format='ISO8601')
 
+    # If ISO parsing failed for most values, try standard parsing without dayfirst
+    # This handles formats like "YYYY-MM-DD HH:MM:SS", "DD/MM/YYYY", etc.
+    if parsed.isna().sum() > len(parsed) * 0.5:  # More than 50% failed
+        parsed = pd.to_datetime(series, errors='coerce')
+
+    # If still have NaN values, try dayfirst for European formats
     if parsed.isna().any():
         parsed_dayfirst = pd.to_datetime(series, errors='coerce', dayfirst=True)
+        # Only fill NaN values, don't overwrite successfully parsed dates
         parsed = parsed.fillna(parsed_dayfirst)
 
-    if parsed.isna().any():
-        try:
-            parsed_iso = pd.to_datetime(series, errors='coerce', format='ISO8601')
-            parsed = parsed.fillna(parsed_iso)
-        except (TypeError, ValueError):
-            pass
-
+    # Remove timezone info if present
     if pd.api.types.is_datetime64tz_dtype(parsed.dtype):
         parsed = parsed.dt.tz_localize(None)
 
