@@ -16,9 +16,7 @@ import logging
 from datetime import datetime
 import time
 
-# Import map interfaces
-from .map_a_hourly import HourlyMapInterface
-from .map_b_weekly import WeeklyMapInterface
+# Import spatial data manager
 from .spatial_data import SpatialDataManager
 from utils.icons import render_title_with_icon, render_header_with_icon, render_subheader_with_icon, render_icon_text, get_icon_for_component
 
@@ -27,13 +25,9 @@ logger = logging.getLogger(__name__)
 
 class MapsPageInterface:
     """Main interface for the Maps page with file loading and navigation."""
-    
+
     def __init__(self):
         self.spatial_manager = SpatialDataManager()
-        self.hourly_interface = HourlyMapInterface()
-        self.weekly_interface = WeeklyMapInterface()
-        
-        # No default paths - all files must be uploaded
     
     def render_maps_page(self) -> None:
         """Render the main Maps page with navigation and file controls."""

@@ -65,12 +65,12 @@ def join_results_to_shapefile(self, gdf: gpd.GeoDataFrame, results_df: pd.DataFr
 ### MapDataProcessor Fix Tests
 - ✅ **All Required Methods Present**: join_results_to_shapefile, prepare_map_data, joiner, filter_manager, aggregation_engine
 - ✅ **join_results_to_shapefile Works**: Successfully joins sample data (2 features + 2 records = 2 joined features)
-- ✅ **Map Interfaces Import**: Both HourlyMapInterface and WeeklyMapInterface import and have the required method
+- ✅ **Map Interfaces Import**: Legacy complex interfaces (HourlyMapInterface, WeeklyMapInterface) exist for test compatibility. Production uses simple map implementations in maps_page.py
 - ✅ **AggregationEngine Access**: All aggregation methods accessible (calculate_date_span_context, compute_weekly_aggregation, compute_aggregation_statistics)
 
 ### Complete Functionality Tests
-- ✅ **Complete Import Chain**: app.py → maps_page.py → map interfaces → data processors → spatial data
-- ✅ **MapsPageInterface Creation**: All components (spatial_manager, hourly_interface, weekly_interface) created successfully
+- ✅ **Complete Import Chain**: app.py → maps_page.py → simple map implementations → data processors → spatial data
+- ✅ **MapsPageInterface Creation**: All components (spatial_manager, simple map renderers) created successfully
 - ✅ **Data Processor Functionality**: Join, aggregation, and date span calculation all working
 - ✅ **Map Interface Methods**: All required methods present in both hourly and weekly interfaces
 - ✅ **Session State Integration**: All required session variables initialized correctly
@@ -120,9 +120,12 @@ joined_data = processor.join_results_to_shapefile(gdf, results_df)
 
 ### Integration Test
 ```python
+# Legacy interface (test-only)
 from map_a_hourly import HourlyMapInterface
 hourly_interface = HourlyMapInterface()
 # ✅ Has data_processor with join_results_to_shapefile method
+
+# Production: Simple maps in maps_page.py use MapDataProcessor directly
 ```
 
 ## Impact Assessment ✅

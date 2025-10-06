@@ -157,10 +157,10 @@ test_maps_with_data.py      # Comprehensive data compatibility tests
 ```
 
 ### Key Classes
-- **MapsPageInterface**: Main orchestration class
+- **MapsPageInterface**: Main orchestration class with simple map implementations
 - **SpatialDataManager**: Handles shapefile operations with column variations
-- **HourlyMapInterface**: Map A implementation
-- **WeeklyMapInterface**: Map B implementation
+- **Simple Map Implementations**: High-performance Folium-based Map A and Map B rendering
+- **Legacy Classes** (test-only): HourlyMapInterface, WeeklyMapInterface (not used in production)
 
 ### Session State Management
 - `maps_shapefile_data`: Loaded and processed shapefile
