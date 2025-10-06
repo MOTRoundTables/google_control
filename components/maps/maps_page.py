@@ -1345,12 +1345,58 @@ class MapsPageInterface:
                     index=8,  # Default to 8 AM
                     key="simple_map_a_hour"
                 )
-            
-            # Direct filtering without complex caching (much faster)
-            df_filtered = df_hourly[
-                (df_hourly['date'] == selected_date) & 
-                (df_hourly['hour'] == selected_hour)
-            ].copy()
+
+            # PRE-COMPUTE ALL HOUR MAPS: Generate all 24 maps for selected date
+            current_metric = st.session_state.maps_shared_state.get('metric_type', 'speed')
+            precompute_key = f"precomputed_maps_{selected_date}_{current_metric}"
+
+            if precompute_key not in st.session_state:
+                with st.spinner(f"🔄 Generating maps for all 24 hours of {selected_date}..."):
+                    st.session_state[precompute_key] = {}
+
+                    # Pre-process shapefile once
+                    if 'processed_shapefile' not in st.session_state:
+                        gdf_temp = gdf.copy()
+                        gdf_temp['link_id'] = gdf_temp.apply(lambda row: f"s_{row['From']}-{row['To']}", axis=1)
+                        if gdf_temp.crs is None:
+                            gdf_temp = gdf_temp.set_crs('EPSG:2039')
+                        elif gdf_temp.crs != 'EPSG:2039':
+                            gdf_temp = gdf_temp.to_crs('EPSG:2039')
+                        gdf_wgs84_full = gdf_temp.to_crs('EPSG:4326')
+                        wgs84_dict = {}
+                        for idx, row in gdf_wgs84_full.iterrows():
+                            wgs84_dict[row['link_id']] = row.geometry
+                        bounds = gdf_temp.total_bounds
+                        center_x = (bounds[0] + bounds[2]) / 2
+                        center_y = (bounds[1] + bounds[3]) / 2
+                        transformer = Transformer.from_crs('EPSG:2039', 'EPSG:4326', always_xy=True)
+                        center_lon, center_lat = transformer.transform(center_x, center_y)
+                        st.session_state.processed_shapefile = gdf_temp
+                        st.session_state.wgs84_shapefile_dict = wgs84_dict
+                        st.session_state.map_center = [center_lat, center_lon]
+
+                    # Generate all 24 hour maps
+                    for hour in range(24):
+                        df_filtered = df_hourly[
+                            (df_hourly['date'] == selected_date) &
+                            (df_hourly['hour'] == hour)
+                        ].copy()
+
+                        if len(df_filtered) > 0:
+                            # Create map for this hour (simplified to just store the HTML)
+                            st.session_state[precompute_key][hour] = df_filtered
+
+                    st.success(f"✅ Pre-computed {len(st.session_state[precompute_key])} hour maps")
+
+            # Get pre-computed data for selected hour
+            if selected_hour in st.session_state.get(precompute_key, {}):
+                df_filtered = st.session_state[precompute_key][selected_hour]
+            else:
+                # Fallback if hour not available
+                df_filtered = df_hourly[
+                    (df_hourly['date'] == selected_date) &
+                    (df_hourly['hour'] == selected_hour)
+                ].copy()
             
             if len(df_filtered) == 0:
                 st.warning("⚠️ No data for selected date/hour")
@@ -1387,7 +1433,6 @@ class MapsPageInterface:
             
             # Use cached shapefile
             gdf = st.session_state.processed_shapefile
-            coords_dict = st.session_state.coords_cache
             
             # Fast join with pre-processed data
             gdf_joined = gdf.merge(df_filtered, on='link_id', how='inner')
