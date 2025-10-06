@@ -87,8 +87,8 @@ class MapsPageInterface:
         # Reactive state management - shared filter states between maps
         if 'maps_shared_state' not in st.session_state:
             st.session_state.maps_shared_state = {
-                'metric_type': 'duration',
-                'aggregation_method': 'median',
+                'metric_type': 'speed',
+                'aggregation_method': 'mean',
                 'symbology_settings': {
                     'classification_method': 'quantiles',
                     'n_classes': 5,
@@ -793,11 +793,11 @@ class MapsPageInterface:
                         st.info(f"🔄 Updating maps to show {metric_type}...")
                 
                 # Shared aggregation method
-                current_aggregation = st.session_state.maps_shared_state.get('aggregation_method', 'median')
+                current_aggregation = st.session_state.maps_shared_state.get('aggregation_method', 'mean')
                 aggregation_method = st.selectbox(
                     "📈 Aggregation Method",
-                    options=['median', 'mean'],
-                    index=0 if current_aggregation == 'median' else 1,
+                    options=['mean', 'median'],
+                    index=0 if current_aggregation == 'mean' else 1,
                     help="Default aggregation method for weekly view (shared state)",
                     key="global_aggregation_method"
                 )
@@ -1167,8 +1167,8 @@ class MapsPageInterface:
         try:
             # Reset shared state to defaults
             st.session_state.maps_shared_state.update({
-                'metric_type': 'duration',
-                'aggregation_method': 'median',
+                'metric_type': 'speed',
+                'aggregation_method': 'mean',
                 'hour_range': (0, 23),
                 'symbology_settings': {
                     'classification_method': 'quantiles',
@@ -1220,8 +1220,8 @@ class MapsPageInterface:
             
             # Calculate comprehensive filter hash for change detection
             filter_data = {
-                'metric_type': st.session_state.maps_shared_state.get('metric_type', 'duration'),
-                'aggregation_method': st.session_state.maps_shared_state.get('aggregation_method', 'median'),
+                'metric_type': st.session_state.maps_shared_state.get('metric_type', 'speed'),
+                'aggregation_method': st.session_state.maps_shared_state.get('aggregation_method', 'mean'),
                 'symbology_settings': st.session_state.maps_shared_state.get('symbology_settings', {}),
                 'hour_range': st.session_state.maps_shared_state.get('hour_range', (0, 23)),
                 'timestamp': update_time.isoformat()  # Include timestamp to ensure uniqueness
@@ -1401,15 +1401,18 @@ class MapsPageInterface:
             
             # Single status message
             st.success(f"📊 Map A ready: {len(gdf_joined)} features for {selected_date}, hour {selected_hour}")
-            
-            # Create Folium map with cached center (avoid expensive calculations)
+
+            # Get current metric type from session state
+            current_metric = st.session_state.maps_shared_state.get('metric_type', 'duration')
+
+            # Create Folium map
             m = folium.Map(
                 location=st.session_state.map_center,
                 zoom_start=10,
                 tiles=None
             )
-            
-            # Add Google Maps grey/minimal base layer for clean background
+
+            # Add Google Maps base layer
             folium.TileLayer(
                 tiles='https://mt1.google.com/vt/lyrs=r&x={x}&y={y}&z={z}',
                 attr='Google Roads',
@@ -1417,92 +1420,75 @@ class MapsPageInterface:
                 overlay=False,
                 control=True
             ).add_to(m)
-            
-            # Get current metric type from session state
-            current_metric = st.session_state.maps_shared_state.get('metric_type', 'duration')
-            
-            # HYPER-FAST: Pre-computed color palettes with cached computation
+
+            # Compute colors
             import numpy as np
-            
-            # Cache key for color computation
-            metric_data_key = f"{current_metric}_{selected_date}_{selected_hour}_{len(gdf_joined)}"
-            
-            if f'color_cache_{metric_data_key}' not in st.session_state:
-                if current_metric == 'speed':
-                    # Vectorized speed-based coloring with pre-computed thresholds
-                    speeds = gdf_joined['avg_speed_kmh'].values
-                    colors = np.select([speeds < 30, speeds < 50], ['red', 'orange'], default='green')
-                    gdf_joined['color'] = colors
-                else:
-                    # Vectorized duration-based coloring with pre-computed thresholds
-                    durations = gdf_joined['duration_min'].values
-                    colors = np.select([durations < 3, durations < 5], ['green', 'orange'], default='red')
-                    gdf_joined['color'] = colors
-                
-                # Cache the colors for instant reuse
-                st.session_state[f'color_cache_{metric_data_key}'] = gdf_joined['color'].copy()
+            if current_metric == 'speed':
+                speeds = gdf_joined['avg_speed_kmh'].values
+                colors = np.select([speeds < 30, speeds < 50], ['red', 'orange'], default='green')
+                gdf_joined['color'] = colors
             else:
-                # INSTANT: Use cached colors
-                gdf_joined['color'] = st.session_state[f'color_cache_{metric_data_key}']
-            
-            # PERFORMANCE: Check if we have cached WGS84 shapefile for Map A
+                durations = gdf_joined['duration_min'].values
+                colors = np.select([durations < 3, durations < 5], ['green', 'orange'], default='red')
+                gdf_joined['color'] = colors
+
+            # PERFORMANCE: Check if we have cached WGS84 shapefile
             if 'wgs84_shapefile_dict' not in st.session_state:
-                # First time: convert and cache WGS84 version
                 gdf_wgs84_full = st.session_state.processed_shapefile.to_crs('EPSG:4326')
                 wgs84_dict = {}
                 for idx, row in gdf_wgs84_full.iterrows():
                     wgs84_dict[row['link_id']] = row.geometry
                 st.session_state.wgs84_shapefile_dict = wgs84_dict
-            
-            # ULTRA-FAST: Use cached WGS84 geometries instead of expensive CRS conversion
+
+            # Use cached WGS84 geometries
             wgs84_geoms = []
             valid_indices = []
             for idx, row in gdf_joined.iterrows():
                 if row['link_id'] in st.session_state.wgs84_shapefile_dict:
                     wgs84_geoms.append(st.session_state.wgs84_shapefile_dict[row['link_id']])
                     valid_indices.append(idx)
-            
-            # Create WGS84 GeoDataFrame from cached geometries
+
+            # Create WGS84 GeoDataFrame
             gdf_display = gdf_joined.loc[valid_indices].copy()
             gdf_display['geometry'] = wgs84_geoms
             gdf_display = gpd.GeoDataFrame(gdf_display, geometry='geometry', crs='EPSG:4326')
-            
-            # ULTRA-FAST: Single GeoJSON layer instead of 2,432 individual PolyLines
+
+            # Style function
             def style_function(feature):
                 return {
                     'color': feature['properties']['color'],
                     'weight': 4,
                     'opacity': 0.9
                 }
-            
-            # Add single GeoJSON layer (MUCH faster than 2,432 individual PolyLines)
+
+            # Add GeoJSON layer
             folium.GeoJson(
                 gdf_display,
                 style_function=style_function,
                 popup=folium.GeoJsonPopup(fields=['link_id', 'duration_min', 'avg_speed_kmh', 'From', 'To']),
-                tooltip=folium.GeoJsonTooltip(fields=['link_id', 'duration_min', 'avg_speed_kmh'], 
+                tooltip=folium.GeoJsonTooltip(fields=['link_id', 'duration_min', 'avg_speed_kmh'],
                                             labels=False,
                                             sticky=True)
             ).add_to(m)
-            
-            # Add date/hour display on map (single line)
+
+            # Add date/hour display
             datetime_display_html = f'''
-            <div style="position: fixed; 
-                        top: 10px; left: 10px; width: 280px; height: 35px; 
-                        background-color: rgba(255,255,255,0.95); border:2px solid #333; z-index:9999; 
-                        font-size:16px; padding: 6px 12px; font-weight: bold; border-radius: 5px; 
+            <div style="position: fixed;
+                        top: 10px; left: 10px; width: 280px; height: 35px;
+                        background-color: rgba(255,255,255,0.95); border:2px solid #333; z-index:9999;
+                        font-size:16px; padding: 6px 12px; font-weight: bold; border-radius: 5px;
                         box-shadow: 0 2px 5px rgba(0,0,0,0.3); display: flex; align-items: center;">
             📅 {selected_date} | ⏰ {selected_hour}:00
             </div>
             '''
             m.get_root().html.add_child(folium.Element(datetime_display_html))
-            
+
             # Add north arrow
             north_arrow_html = '''
-            <div style="position: fixed; 
-                        top: 70px; left: 10px; width: 40px; height: 40px; 
-                        background-color: rgba(255,255,255,0.95); border:2px solid #333; z-index:9999; 
-                        font-size:14px; padding: 5px; text-align: center; border-radius: 50%; 
+            <div style="position: fixed;
+                        top: 70px; left: 10px; width: 40px; height: 40px;
+                        background-color: rgba(255,255,255,0.95); border:2px solid #333; z-index:9999;
+                        font-size:14px; padding: 5px; text-align: center; border-radius: 50%;
                         display: flex; align-items: center; justify-content: center; flex-direction: column;
                         box-shadow: 0 2px 5px rgba(0,0,0,0.3);">
             <span style="font-weight: bold; font-size: 18px;">⬆</span>
@@ -1510,44 +1496,40 @@ class MapsPageInterface:
             </div>
             '''
             m.get_root().html.add_child(folium.Element(north_arrow_html))
-            
-            # Add scale bar and measurement controls
+
+            # Add measurement controls
             from folium import plugins
             plugins.MeasureControl(position='bottomleft').add_to(m)
-            
-            # PERFORMANCE: Pre-cached legend HTML for instant rendering
-            if f'legend_cache_{current_metric}' not in st.session_state:
-                if current_metric == 'speed':
-                    st.session_state[f'legend_cache_{current_metric}'] = '''
-                    <div style="position: fixed; 
-                                top: 10px; right: 10px; width: 180px; height: 100px; 
-                                background-color: rgba(255,255,255,0.95); border:2px solid grey; z-index:9999; 
-                                font-size:14px; padding: 10px; border-radius: 5px;
-                                box-shadow: 0 2px 5px rgba(0,0,0,0.3);">
-                    <b>Speed Legend</b><br>
-                    <i class="fa fa-minus" style="color:green"></i> > 50 km/h (Fast)<br>
-                    <i class="fa fa-minus" style="color:orange"></i> 30-50 km/h (Medium)<br>
-                    <i class="fa fa-minus" style="color:red"></i> < 30 km/h (Slow)<br>
-                    </div>
-                    '''
-                else:
-                    st.session_state[f'legend_cache_{current_metric}'] = '''
-                    <div style="position: fixed; 
-                                top: 10px; right: 10px; width: 150px; height: 100px; 
-                                background-color: rgba(255,255,255,0.95); border:2px solid grey; z-index:9999; 
-                                font-size:14px; padding: 10px; border-radius: 5px;
-                                box-shadow: 0 2px 5px rgba(0,0,0,0.3);">
-                    <b>Duration Legend</b><br>
-                    <i class="fa fa-minus" style="color:green"></i> < 3 min (Fast)<br>
-                    <i class="fa fa-minus" style="color:orange"></i> 3-5 min (Medium)<br>
-                    <i class="fa fa-minus" style="color:red"></i> > 5 min (Slow)<br>
-                    </div>
-                    '''
-            
-            # Use cached legend HTML
-            legend_html = st.session_state[f'legend_cache_{current_metric}']
+
+            # Add legend
+            if current_metric == 'speed':
+                legend_html = '''
+                <div style="position: fixed;
+                            top: 10px; right: 10px; width: 180px; height: 100px;
+                            background-color: rgba(255,255,255,0.95); border:2px solid grey; z-index:9999;
+                            font-size:14px; padding: 10px; border-radius: 5px;
+                            box-shadow: 0 2px 5px rgba(0,0,0,0.3);">
+                <b>Speed Legend</b><br>
+                <i class="fa fa-minus" style="color:green"></i> > 50 km/h (Fast)<br>
+                <i class="fa fa-minus" style="color:orange"></i> 30-50 km/h (Medium)<br>
+                <i class="fa fa-minus" style="color:red"></i> < 30 km/h (Slow)<br>
+                </div>
+                '''
+            else:
+                legend_html = '''
+                <div style="position: fixed;
+                            top: 10px; right: 10px; width: 150px; height: 100px;
+                            background-color: rgba(255,255,255,0.95); border:2px solid grey; z-index:9999;
+                            font-size:14px; padding: 10px; border-radius: 5px;
+                            box-shadow: 0 2px 5px rgba(0,0,0,0.3);">
+                <b>Duration Legend</b><br>
+                <i class="fa fa-minus" style="color:green"></i> < 3 min (Fast)<br>
+                <i class="fa fa-minus" style="color:orange"></i> 3-5 min (Medium)<br>
+                <i class="fa fa-minus" style="color:red"></i> > 5 min (Slow)<br>
+                </div>
+                '''
             m.get_root().html.add_child(folium.Element(legend_html))
-            
+
             # Display map
             
             # Apply comprehensive CSS fix for iframe stability during scroll
