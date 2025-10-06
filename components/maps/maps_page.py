@@ -1621,14 +1621,28 @@ class MapsPageInterface:
             if gdf is None or df_weekly is None:
                 st.error("❌ No data available")
                 return
-            
-            # Fast hour selector without full page rerun
-            selected_hour = st.selectbox(
-                "Select Hour",
-                options=list(range(24)),
-                index=8,  # Default to 8 AM
-                key="simple_map_b_hour"
-            )
+
+            # Control selectors
+            col1, col2 = st.columns(2)
+
+            with col1:
+                # DayType selector
+                selected_daytype = st.selectbox(
+                    "Day Type",
+                    options=['weekday', 'weekend', 'holiday', 'all'],
+                    index=0,  # Default to weekday
+                    key="simple_map_b_daytype",
+                    help="Filter by type of day (default: weekday)"
+                )
+
+            with col2:
+                # Fast hour selector without full page rerun
+                selected_hour = st.selectbox(
+                    "Select Hour",
+                    options=list(range(24)),
+                    index=8,  # Default to 8 AM
+                    key="simple_map_b_hour"
+                )
             
             # High-performance data caching and filtering for Map B
             @st.cache_data(ttl=3600)  # Cache for 1 hour
@@ -1637,9 +1651,15 @@ class MapsPageInterface:
                 return _df_weekly.to_dict('records')
             
             @st.cache_data
-            def filter_weekly_data_ultra_fast(_df_weekly_serialized, selected_hour):
+            def filter_weekly_data_ultra_fast(_df_weekly_serialized, selected_hour, selected_daytype):
                 """Ultra-fast cached filtering of weekly data."""
                 df_weekly = pd.DataFrame(_df_weekly_serialized)
+
+                # Apply daytype filter
+                if selected_daytype != 'all' and 'daytype' in df_weekly.columns:
+                    df_weekly = df_weekly[df_weekly['daytype'] == selected_daytype].copy()
+
+                # Apply hour filter
                 if 'hour' in df_weekly.columns:
                     df_filtered = df_weekly[df_weekly['hour'] == selected_hour].copy()
                 else:
@@ -1650,11 +1670,12 @@ class MapsPageInterface:
             try:
                 # Cache data serialization to avoid repeated conversion
                 df_weekly_cached = prepare_weekly_data_cache(df_weekly)
-                
+
                 # Get filtered data from cache (ultra-fast)
                 filtered_records = filter_weekly_data_ultra_fast(
                     df_weekly_cached,
-                    selected_hour
+                    selected_hour,
+                    selected_daytype
                 )
                 
                 if not filtered_records:
@@ -1689,13 +1710,19 @@ class MapsPageInterface:
             except Exception as error:
                 # Simple fallback without complex caching
                 st.warning(f"⚠️ Using simple processing: {error}")
+
+                # Apply daytype filter
+                if selected_daytype != 'all' and 'daytype' in df_weekly.columns:
+                    df_weekly = df_weekly[df_weekly['daytype'] == selected_daytype].copy()
+
+                # Apply hour filter
                 if 'hour' in df_weekly.columns:
                     df_filtered = df_weekly[df_weekly['hour'] == selected_hour].copy()
                 else:
                     df_filtered = df_weekly.copy()
-                
+
                 if len(df_filtered) == 0:
-                    st.warning("⚠️ No data for selected hour")
+                    st.warning("⚠️ No data for selected hour and day type")
                     return
                 
                 # Create link_id and join (fallback mode)
@@ -1703,7 +1730,8 @@ class MapsPageInterface:
                 gdf['link_id'] = gdf.apply(lambda row: f"s_{row['From']}-{row['To']}", axis=1)
                 gdf_joined = gdf.merge(df_filtered, on='link_id', how='inner')
             
-            st.info(f"📊 Showing weekly data for hour {selected_hour}: {len(gdf_joined)} features")
+            daytype_text = f" ({selected_daytype})" if selected_daytype != 'all' else ""
+            st.info(f"📊 Showing weekly data{daytype_text} for hour {selected_hour}: {len(gdf_joined)} features")
             
             if len(gdf_joined) == 0:
                 st.error("❌ No data after join - check link_id matching")

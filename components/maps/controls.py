@@ -25,45 +25,58 @@ class FilterControls:
     def __init__(self):
         self.filter_operators = ['above', 'below', 'between']
     
-    def render_temporal_controls(self, data_bounds: Dict, key_prefix: str = "") -> Dict[str, Any]:
+    def render_temporal_controls(self, data_bounds: Dict, key_prefix: str = "",
+                                map_type: str = "hourly") -> Dict[str, Any]:
         """
-        Render temporal filter controls (date picker, hour selector).
-        
+        Render temporal filter controls (date picker, hour selector, daytype).
+
         Args:
             data_bounds: Dictionary with data bounds (min/max dates, hours)
             key_prefix: Prefix for Streamlit widget keys
-            
+            map_type: Type of map ('hourly' or 'weekly')
+
         Returns:
             Dictionary with selected temporal filters
         """
         st.subheader("Temporal Filters")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Date range picker
-            min_date = data_bounds.get('min_date', date.today() - timedelta(days=30))
-            max_date = data_bounds.get('max_date', date.today())
-            
-            date_range = st.date_input(
-                "Select Date Range",
-                value=(min_date, max_date),
-                min_value=min_date,
-                max_value=max_date,
-                key=f"{key_prefix}_date_range"
+
+        # For weekly map, show daytype selector
+        if map_type == "weekly":
+            daytype = st.selectbox(
+                "Day Type",
+                options=['weekday', 'weekend', 'holiday', 'all'],
+                index=0,  # Default to weekday
+                key=f"{key_prefix}_daytype",
+                help="Filter by type of day (default: weekday)"
             )
-            
-            # Handle single date selection
-            if isinstance(date_range, date):
-                date_range = (date_range, date_range)
-            elif len(date_range) == 1:
-                date_range = (date_range[0], date_range[0])
-        
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            # Date range picker (only for hourly map)
+            if map_type == "hourly":
+                min_date = data_bounds.get('min_date', date.today() - timedelta(days=30))
+                max_date = data_bounds.get('max_date', date.today())
+
+                date_range = st.date_input(
+                    "Select Date Range",
+                    value=(min_date, max_date),
+                    min_value=min_date,
+                    max_value=max_date,
+                    key=f"{key_prefix}_date_range"
+                )
+
+                # Handle single date selection
+                if isinstance(date_range, date):
+                    date_range = (date_range, date_range)
+                elif len(date_range) == 1:
+                    date_range = (date_range[0], date_range[0])
+
         with col2:
             # Hour range selector
             min_hour = data_bounds.get('min_hour', 0)
             max_hour = data_bounds.get('max_hour', 23)
-            
+
             hour_range = st.slider(
                 "Select Hour Range",
                 min_value=min_hour,
@@ -71,11 +84,15 @@ class FilterControls:
                 value=(min_hour, max_hour),
                 key=f"{key_prefix}_hour_range"
             )
-        
-        return {
-            'date_range': date_range,
-            'hour_range': hour_range
-        }
+
+        result = {'hour_range': hour_range}
+
+        if map_type == "hourly":
+            result['date_range'] = date_range
+        else:  # weekly
+            result['daytype'] = daytype
+
+        return result
     
     def render_metric_controls(self, key_prefix: str = "") -> Dict[str, Any]:
         """
@@ -321,36 +338,17 @@ class FilterControls:
         else:
             st.caption("⏸️ Manual mode: Click refresh to update maps")
         
-        # Temporal controls (date picker only for hourly map)
-        if map_type == "hourly":
-            filters['temporal'] = self.render_temporal_controls(data_bounds, key_prefix)
-        else:  # weekly map
-            # Only hour selector for weekly map
-            st.subheader("Temporal Filters")
-            min_hour = data_bounds.get('min_hour', 0)
-            max_hour = data_bounds.get('max_hour', 23)
-            
-            # Use shared state for consistency between maps
-            shared_state = st.session_state.get('maps_shared_state', {})
-            current_hour_range = shared_state.get('hour_range', (min_hour, max_hour))
-            
-            hour_range = st.slider(
-                "Select Hour Range",
-                min_value=min_hour,
-                max_value=max_hour,
-                value=current_hour_range,
-                key=f"{key_prefix}_hour_range",
-                help="Hour range applies to both maps for consistency"
-            )
-            
-            # Update shared state if changed
+        # Temporal controls
+        filters['temporal'] = self.render_temporal_controls(data_bounds, key_prefix, map_type)
+
+        # Update shared state for hour range
+        if map_type == "weekly":
+            hour_range = filters['temporal'].get('hour_range')
             if 'maps_shared_state' in st.session_state:
                 if st.session_state.maps_shared_state.get('hour_range') != hour_range:
                     st.session_state.maps_shared_state['hour_range'] = hour_range
                     if reactive_updates:
                         self._trigger_filter_update("Hour range changed", key_prefix)
-            
-            filters['temporal'] = {'hour_range': hour_range}
         
         # Metric controls with shared state
         filters['metrics'] = self.render_metric_controls_reactive(key_prefix)

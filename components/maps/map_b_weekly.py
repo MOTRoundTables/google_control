@@ -207,21 +207,30 @@ class WeeklyMapInterface:
         
         return joined_data, date_context
     
-    def _apply_hour_filters(self, results_data: pd.DataFrame, 
+    def _apply_hour_filters(self, results_data: pd.DataFrame,
                            temporal_filters: Dict[str, Any]) -> pd.DataFrame:
-        """Apply hour filters to results data (no date filters for weekly view)."""
+        """Apply hour filters and daytype filters to results data (no date filters for weekly view)."""
         filtered_data = results_data.copy()
-        
+
+        # DayType filter
+        if 'daytype' in temporal_filters:
+            daytype = temporal_filters['daytype']
+            if daytype != 'all':
+                if 'daytype' in filtered_data.columns:
+                    mask = filtered_data['daytype'] == daytype
+                    filtered_data = filtered_data[mask]
+                    logger.info(f"Applied daytype filter: {daytype}, remaining records: {len(filtered_data)}")
+
         # Hour range filter
         if 'hour_range' in temporal_filters:
             hour_range = temporal_filters['hour_range']
             if len(hour_range) == 2:
                 start_hour, end_hour = hour_range
-                
+
                 if 'hour' in filtered_data.columns:
                     mask = (filtered_data['hour'] >= start_hour) & (filtered_data['hour'] <= end_hour)
                     filtered_data = filtered_data[mask]
-        
+
         return filtered_data
     
     def _apply_attribute_filters(self, results_data: pd.DataFrame, 
@@ -252,36 +261,44 @@ class WeeklyMapInterface:
         
         return filtered_data
     
-    def _display_date_context(self, date_context: Dict[str, Any], 
+    def _display_date_context(self, date_context: Dict[str, Any],
                              control_state: Dict[str, Any]) -> None:
         """Display context text showing averaged date span and N days."""
-        
+
         aggregation_method = date_context.get('aggregation_method', 'median')
         method_display = aggregation_method.title()
-        
+
+        # Get daytype filter
+        temporal_filters = control_state.get('filters', {}).get('temporal', {})
+        daytype = temporal_filters.get('daytype', 'all')
+
         # Create context message
-        context_message = f"**{method_display} aggregation** over {date_context['date_range_str']}, N = {date_context['n_days']} days"
-        
+        daytype_text = f" ({daytype})" if daytype != 'all' else ""
+        context_message = f"**{method_display} aggregation{daytype_text}** over {date_context['date_range_str']}, N = {date_context['n_days']} days"
+
         # Display in an info box
         st.info(f"📅 {context_message}")
-        
+
         # Add additional context details in expander
         with st.expander("📊 Aggregation Details", expanded=False):
             col1, col2 = st.columns(2)
-            
+
             with col1:
                 st.write("**Date Range:**")
                 st.write(f"• Start: {date_context['start_date']}")
                 st.write(f"• End: {date_context['end_date']}")
                 st.write(f"• Days: {date_context['n_days']}")
-            
+
             with col2:
                 st.write("**Aggregation:**")
                 st.write(f"• Method: {method_display}")
                 st.write(f"• Type: Weekly hourly")
-                
+
+                # Show daytype filter
+                if daytype != 'all':
+                    st.write(f"• Day Type: {daytype.title()}")
+
                 # Show hour range if filtered
-                temporal_filters = control_state.get('filters', {}).get('temporal', {})
                 if 'hour_range' in temporal_filters:
                     hour_range = temporal_filters['hour_range']
                     if hour_range[0] != 0 or hour_range[1] != 23:
@@ -310,9 +327,15 @@ class WeeklyMapInterface:
     def _format_active_filters(self, control_state: Dict[str, Any]) -> List[str]:
         """Format active filters for legend display."""
         filters = []
-        
+
         temporal = control_state.get('filters', {}).get('temporal', {})
-        
+
+        # DayType filter
+        if 'daytype' in temporal:
+            daytype = temporal['daytype']
+            if daytype != 'all':
+                filters.append(f"Day Type: {daytype.title()}")
+
         # Hour range (no date range for weekly view)
         if 'hour_range' in temporal:
             hour_range = temporal['hour_range']
@@ -322,7 +345,7 @@ class WeeklyMapInterface:
                     filters.append(f"Hour: {start_hour}:00")
                 else:
                     filters.append(f"Hours: {start_hour}:00-{end_hour}:00")
-        
+
         # Aggregation method
         metric_config = control_state.get('filters', {}).get('metrics', {})
         aggregation_method = metric_config.get('aggregation_method', 'median')
