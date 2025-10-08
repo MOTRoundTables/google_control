@@ -206,6 +206,18 @@ specs/
 # Output and generated data
 control_output/
 runs/
+# Allow runs/1_10_25/output folder structure but ignore large CSV files
+!runs/1_10_25/
+!runs/1_10_25/output/
+!runs/1_10_25/output/control/
+!runs/1_10_25/output/control/06_10_25_01_33/
+!runs/1_10_25/output/raw/
+# Ignore specific large CSV files
+runs/1_10_25/output/control/06_10_25_01_33/best_valid_observations.csv
+runs/1_10_25/output/control/06_10_25_01_33/validated_data.csv
+runs/1_10_25/output/raw/data.csv
+runs/1_10_25/output/raw/segments.csv
+runs/1_10_25/output/raw/steps.csv
 
 # Distribution packages (created by distribution scripts)
 distribution_packages/

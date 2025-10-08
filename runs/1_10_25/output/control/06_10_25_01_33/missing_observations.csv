@@ -1,0 +1,5 @@
+﻿Name,link_id,RequestedTime,is_valid,valid_code,hausdorff_distance,hausdorff_pass,RouteAlternative,SegmentID,DataID
+s_10385-7116,s_10385-7116,20:15:00,False,94,,False,,,
+s_10828-817,s_10828-817,16:30:00,False,94,,False,,,
+s_7145-7202,s_7145-7202,16:30:00,False,94,,False,,,
+s_7171-7153,s_7171-7153,12:30:00,False,94,,False,,,

@@ -1,0 +1,83 @@
+{
+  "_metadata": {
+    "config_version": "1.0",
+    "description": "Google Maps Link Monitoring Processing Configuration",
+    "generated_at": "2025-10-06T01:14:58.582834"
+  },
+  "blacklist_links": null,
+  "chunk_size": 50000,
+  "custom_holidays_file": null,
+  "daytype_mapping": {
+    "holiday": [
+      "חג",
+      "holiday"
+    ],
+    "weekday": [
+      "יום חול",
+      "חול",
+      "weekday"
+    ],
+    "weekend": [
+      "סוף שבוע",
+      "שבת",
+      "weekend"
+    ]
+  },
+  "distance_range_m": "(0, 50000)",
+  "duration_range_sec": "(0, 7200)",
+  "end_date": "2025-10-04",
+  "generate_quality_reports": true,
+  "holidays_treatment": "holiday",
+  "hours_include": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23
+  ],
+  "input_file_path": "C:\\Users\\GOLAN-~1\\AppData\\Local\\Temp\\maps_data_6r5gpur0.csv",
+  "min_valid_per_hour": 1,
+  "output_dir": "runs\\1_10_25\\output\\aggregation\\from_control_06_10_25_00_18",
+  "output_parquet": false,
+  "recompute_std_from_raw": false,
+  "speed_range_kmh": "(0, 200)",
+  "start_date": "2025-10-01",
+  "timestamp_format": "%Y-%m-%d %H:%M:%S",
+  "timezone": "Asia/Jerusalem",
+  "use_holidays": true,
+  "valid_codes_ok": [
+    "OK",
+    "VALID",
+    "1"
+  ],
+  "weekday_include": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+  ],
+  "weekly_grouping": "daytype",
+  "whitelist_links": null
+}

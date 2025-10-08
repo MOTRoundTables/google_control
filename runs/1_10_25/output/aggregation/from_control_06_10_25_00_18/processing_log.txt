@@ -1,0 +1,31 @@
+============================================================
+GOOGLE MAPS LINK MONITORING - PROCESSING LOG
+============================================================
+Processing completed: 2025-10-06 01:13:01
+Processing duration: 16.3 seconds
+
+ROW COUNTS:
+  Raw data rows processed: 930,997
+  Hourly aggregation rows: 232,783
+  Weekly profile rows: 174,722
+
+DATA VALIDITY:
+  Validation method: boolean_is_valid_column
+  Valid rows: 930,997 / 930,997 (100.0%)
+  Invalid rows: 0
+
+LINK COVERAGE:
+  Distinct links processed: 2,429
+
+N_VALID DISTRIBUTION (per hour):
+  Min: 1
+  Mean: 4.0
+  Median: 4.0
+  Max: 4
+
+VALID HOURS BY DAYTYPE:
+  holiday: 58,181 hours
+  weekday: 58,295 hours
+  weekend: 116,307 hours
+
+============================================================
