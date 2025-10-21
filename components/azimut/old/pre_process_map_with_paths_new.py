@@ -159,6 +159,7 @@ def main():
     gdf_ll = gdf.to_crs(4326)
 
     rows = []
+    excel_rows = []
     crow_geoms = []
     axis_fix_count = 0
 
@@ -208,11 +209,10 @@ def main():
 
         start_coord = f"{y1_ll:.15f},{x1_ll:.15f}"
         end_coord = f"{y2_ll:.15f},{x2_ll:.15f}"
-        travel_mode = f"{code_b}-{code_a}"
+        travel_mode = f"{code_a}-{code_b}"
 
         kid_str = str(kid_val)
-        # New Id encodes the back azimuth (start node compass) first, then the forward azimuth at the end node.
-        new_id = f"{kid_str}-{code_b}{code_a}"
+        new_id = f"{kid_str}-{code_a}{code_b}"  # start heading first
 
         rows.append({
             "kid": kid_str,
@@ -223,10 +223,6 @@ def main():
             "code_b": code_b,
             "dir_b": dir_b,
             "azi_b": back_use,
-            "code_start": code_b,
-            "dir_start": dir_b,
-            "code_end": code_a,
-            "dir_end": dir_a,
             "start_lat": y1_ll,
             "start_lon": x1_ll,
             "end_lat": y2_ll,
@@ -248,22 +244,15 @@ def main():
         })
         crow_geoms.append(crow)
 
+        excel_rows.append({
+            "שםמקטע": new_id,
+            "אופןנסיעה": 0,
+            "נקודתהתחלה": start_coord,
+            "נקודתסיום": end_coord,
+        })
 
     # Build crow GDF with attributes
     crow_df = gpd.GeoDataFrame(rows, geometry=crow_geoms, crs=crs)
-
-    # Debug summary: compare final geodesic azimuths to planar heading
-    planar_diffs = []
-    for r in rows:
-        pl = r["azi_a_pl"]
-        if math.isnan(pl):
-            continue
-        planar_diffs.append(angular_distance(r["azi_a"], pl))
-    if planar_diffs:
-        flips = sum(1 for d in planar_diffs if d > 90.0)
-        avg_diff = sum(planar_diffs) / len(planar_diffs)
-        max_diff = max(planar_diffs)
-        print(f"Planar vs geodesic diff (deg): avg={avg_diff:.3f}, max={max_diff:.3f}, flips(>90 deg)={flips}")
 
     # Write shapefiles
     ensure_folder(OUT_SHP)
@@ -290,16 +279,20 @@ def main():
     crow_fields = [
         "Id",
         "kid",
-        "code_start",
-        "dir_start",
-        "code_end",
-        "dir_end",
         "code_a",
         "dir_a",
         "azi_a",
         "code_b",
         "dir_b",
         "azi_b",
+        "start_lon",
+        "start_lat",
+        "end_lon",
+        "end_lat",
+        "start_x",
+        "start_y",
+        "end_x",
+        "end_y",
         "travel_mode",
         "azi_a_raw",
         "azi_b_raw",
@@ -315,20 +308,22 @@ def main():
     except PermissionError:
         print(f"Warning: could not overwrite {CROW_SHP}; close the file if you need it refreshed.")
 
-    # 3) Excel summary (start compass sector first)
-    excel_rows = [
-        {
-            "שם מקטע": r["Id"],
-            "אופן": r["travel_mode"],
-            "נסיעה": r["dir_start"],
-            "נקודת התחלה": r["start_coord"],
-            "נקודת סיום": r["end_coord"],
-        }
-        for r in rows
-    ]
-
+    # 3) Excel summary
     xls = pd.DataFrame(
         excel_rows,
+        columns=["שםמקטע", "אופןנסיעה", "נקודתהתחלה", "נקודתסיום"],
+    )
+    xls = pd.DataFrame(
+        [
+            {
+                "שם מקטע": r["Id"],
+                "אופן": r["travel_mode"],
+                "נסיעה": r["dir_a"],
+                "נקודת התחלה": r["start_coord"],
+                "נקודת סיום": r["end_coord"],
+            }
+            for r in rows
+        ],
         columns=["שם מקטע", "אופן", "נסיעה", "נקודת התחלה", "נקודת סיום"],
     )
     Path(OUT_XLSX).parent.mkdir(parents=True, exist_ok=True)
@@ -339,19 +334,6 @@ def main():
 
     # 4) Crow diagnostics CSV (matches crow shapefile fields)
     crow_csv_df = crow_df.copy()
-    drop_debug_coords = [
-        "start_lat",
-        "start_lon",
-        "end_lat",
-        "end_lon",
-        "start_x",
-        "start_y",
-        "end_x",
-        "end_y",
-        "start_coord",
-        "end_coord",
-    ]
-    crow_csv_df = crow_csv_df.drop(columns=drop_debug_coords, errors="ignore")
     crow_csv_df["geometry_wkt"] = crow_csv_df.geometry.to_wkt()
     crow_csv_df = crow_csv_df.drop(columns="geometry")
     crow_csv_df.to_csv(CROW_CSV, index=False, encoding="utf-8-sig")

@@ -33,8 +33,8 @@ from zipfile import ZipFile
 import geopandas as gpd
 import pandas as pd
 from shapely.geometry import LineString, MultiLineString
-from shapely.ops import linemerge, transform
-from pyproj import Geod, Transformer
+from shapely.ops import linemerge
+from pyproj import Geod
 
 # ------------------------------------------------------------------
 # User paths
@@ -42,14 +42,12 @@ IN_SHP    = r"runs/1_11_25/input/maps/basemap/1_11_2025_base_map/1_11_2025_base_
 OUT_SHP   = r"runs/1_11_25/input/maps/basemap/azimut_base_map/1_11_2025_base_map_azimut_id.shp"
 CROW_SHP  = r"runs/1_11_25/input/maps/basemap/azimut_base_map/1_11_2025_base_map_crow_only.shp"
 OUT_XLSX  = r"runs/1_11_25/input/maps/a_b/1_11_2025_a_b.xlsx"
-CROW_CSV  = str(Path(CROW_SHP).with_suffix(".csv"))
 # ------------------------------------------------------------------
 
 IN_SHP   = os.getenv("IN_SHP", IN_SHP)
 OUT_SHP  = os.getenv("OUT_SHP", OUT_SHP)
 CROW_SHP = os.getenv("CROW_SHP", CROW_SHP)
 OUT_XLSX = os.getenv("OUT_XLSX", OUT_XLSX)
-CROW_CSV = os.getenv("CROW_CSV", CROW_CSV)
 
 
 def _find_shp_in_zip(zip_path: Path) -> str:
@@ -154,19 +152,13 @@ def main():
     kid_field = pick_id_field(gdf)
 
     # Compute bearings on WGS84
-    transformer_ll = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+    gdf_ll = gdf.to_crs(4326)
     geod = Geod(ellps="WGS84")
 
     rows = []
-    excel_rows = []
     crow_geoms = []
 
-    for geom_orig, kid_val in zip(gdf.geometry, gdf[kid_field]):
-        ls_orig = to_linestring(geom_orig)
-        if ls_orig is None:
-            continue
-
-        geom_wgs84 = transform(transformer_ll.transform, ls_orig)
+    for geom_wgs84, geom_orig, kid_val in zip(gdf_ll.geometry, gdf.geometry, gdf[kid_field]):
         ls_ll = to_linestring(geom_wgs84)
         ls_orig = to_linestring(geom_orig)
         if ls_ll is None or ls_orig is None:
@@ -193,10 +185,6 @@ def main():
         code_a, lab_a = octant(fwd_az)
         code_b, lab_b = octant(back_az)
 
-        start_coord = f"{y1_ll:.15f},{x1_ll:.15f}"
-        end_coord = f"{y2_ll:.15f},{x2_ll:.15f}"
-        travel_mode = f"{code_a}-{code_b}"
-
         # crow line
         crow = LineString([(x1, y1), (x2, y2)])
 
@@ -213,19 +201,8 @@ def main():
             "lab_a": lab_a, "lab_b": lab_b,
             "azi_ap": fwd_az_p, "azi_bp": back_az_p,
             "az_a_lls": fwd_az_llswap, "az_b_lls": back_az_llswap,
-            "start_lat": y1_ll, "start_lon": x1_ll,
-            "end_lat": y2_ll, "end_lon": x2_ll,
-            "start_coord": start_coord, "end_coord": end_coord,
-            "travel_mode": travel_mode,
         })
         crow_geoms.append(crow)
-
-        excel_rows.append({
-            "שםמקטע": new_id,
-            "אופןנסיעה": 0,
-            "נקודתהתחלה": start_coord,
-            "נקודתסיום": end_coord,
-        })
 
     crow_df = gpd.GeoDataFrame(rows, geometry=crow_geoms, crs=crs)
 
@@ -233,38 +210,20 @@ def main():
     ensure_folder(OUT_SHP)
     out_gdf = gdf[["geometry"]].copy()
     out_gdf["Id"] = [r["new_id"] for r in rows]  # align by row
-    try:
-        out_gdf.to_file(OUT_SHP)
-    except PermissionError:
-        print(f"Warning: could not overwrite {OUT_SHP}; close the file if you need it refreshed.")
+    out_gdf.to_file(OUT_SHP)
 
     # 2) crow geometry + diagnostics
     ensure_folder(CROW_SHP)
-    crow_df_for_csv = crow_df.copy()
-    try:
-        crow_df.to_file(CROW_SHP)
-    except PermissionError:
-        print(f"Warning: could not overwrite {CROW_SHP}; close the file if you need it refreshed.")
+    crow_df.to_file(CROW_SHP)
 
     # 3) Excel summary
     ensure_folder(OUT_XLSX)
-    ensure_folder(CROW_CSV)
-    summary_df = pd.DataFrame(excel_rows, columns=["שםמקטע", "אופןנסיעה", "נקודתהתחלה", "נקודתסיום"])
-    try:
-        summary_df.to_excel(OUT_XLSX, index=False, sheet_name="links")
-    except PermissionError:
-        print(f"Warning: could not overwrite {OUT_XLSX}; close the file if you need it refreshed.")
-
-    # 4) Crow diagnostics CSV
-    crow_df_for_csv["geometry_wkt"] = crow_df_for_csv.geometry.to_wkt()
-    crow_df_for_csv = crow_df_for_csv.drop(columns="geometry")
-    crow_df_for_csv.to_csv(CROW_CSV, index=False, encoding="utf-8-sig")
+    pd.DataFrame(rows).to_excel(OUT_XLSX, index=False)
 
     print("Done.")
     print(f"Wrote: {OUT_SHP}")
     print(f"Wrote: {CROW_SHP}")
     print(f"Wrote: {OUT_XLSX}")
-    print(f"Wrote: {CROW_CSV}")
 
 
 if __name__ == "__main__":
