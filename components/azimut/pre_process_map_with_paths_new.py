@@ -319,8 +319,7 @@ def main():
     excel_rows = [
         {
             "שם מקטע": r["Id"],
-            "אופן": r["travel_mode"],
-            "נסיעה": r["dir_start"],
+            "אופן": 0,
             "נקודת התחלה": r["start_coord"],
             "נקודת סיום": r["end_coord"],
         }
@@ -329,7 +328,7 @@ def main():
 
     xls = pd.DataFrame(
         excel_rows,
-        columns=["שם מקטע", "אופן", "נסיעה", "נקודת התחלה", "נקודת סיום"],
+        columns=["שם מקטע", "אופן", "נקודת התחלה", "נקודת סיום"],
     )
     Path(OUT_XLSX).parent.mkdir(parents=True, exist_ok=True)
     try:
