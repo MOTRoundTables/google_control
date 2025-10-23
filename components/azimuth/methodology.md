@@ -16,6 +16,178 @@ This document defines the methodology for assigning octant-based directional cod
 
 ---
 
+## Visual Workflow: From Two-Sided Links to Directional IDs
+
+This section provides a step-by-step visual guide to understanding how the azimuth preprocessing algorithm transforms road network links into directional IDs.
+
+### Step 1: Input - Two-Sided Links on Map
+
+**Starting Point:** A road network where each link may appear twice (once for each direction)
+
+**Example:** Link **909** appears in the attribute table with two entries:
+- Entry 1: Direction from Node A to Node B (northbound)
+- Entry 2: Direction from Node B to Node A (southbound)
+
+**Problem:** Both entries share the same ID (**909**), making it impossible to distinguish between directional variants for route alternative queries.
+
+### Step 2: Algorithm Processing
+
+The azimuth preprocessing algorithm performs the following transformations:
+
+#### 2.1 Crow Flight Geometry Creation
+- Simplifies each polyline to a straight line from start point to end point
+- Creates "crow flight" geometry for directional analysis
+- Preserves original complex geometry in separate output file
+
+#### 2.2 Azimuth Calculation
+For each link, the system calculates geodesic azimuths using WGS84 ellipsoid:
+
+**Forward Azimuth (A→B):**
+- Compass bearing from start node to end node
+- Example: 22.5° (pointing Northeast)
+
+**Backward Azimuth (B→A):**
+- Compass bearing from end node to start node
+- Example: 202.5° (pointing Southwest)
+
+#### 2.3 Octant Classification
+Each azimuth is mapped to one of 8 directional sectors:
+
+**The Compass Rose - 8 Octants:**
+
+| Octant | Direction | Azimuth Range | Center Angle |
+|:------:|-----------|---------------|--------------|
+| **1** | N (North) | 337.5° - 22.5° | 0° |
+| **2** | NE (Northeast) | 22.5° - 67.5° | 45° |
+| **3** | E (East) | 67.5° - 112.5° | 90° |
+| **4** | SE (Southeast) | 112.5° - 157.5° | 135° |
+| **5** | S (South) | 157.5° - 202.5° | 180° |
+| **6** | SW (Southwest) | 202.5° - 247.5° | 225° |
+| **7** | W (West) | 247.5° - 292.5° | 270° |
+| **8** | NW (Northwest) | 292.5° - 337.5° | 315° |
+
+**Visual Representation:**
+```
+                    N (1)
+                     0°
+                     |
+        NW (8)       |       NE (2)
+         315°        |        45°
+                     |
+    W (7) ------  Center  ------ E (3)
+     270°            |           90°
+                     |
+        SW (6)       |       SE (4)
+         225°        |        135°
+                     |
+                    S (5)
+                    180°
+```
+
+#### 2.4 Directional ID Construction
+
+**ID Format:** `{original_id}-{start_octant}{end_octant}`
+
+**Encoding Logic:**
+- **First Digit (Start Octant):** Represents the direction at the **start node** (backward azimuth B→A)
+- **Second Digit (End Octant):** Represents the direction at the **end node** (forward azimuth A→B)
+
+### Step 3: Output - Directional IDs
+
+**Result:** Each directional variant receives a unique ID encoding its orientation
+
+**Example for Link 909:**
+
+**Northbound Travel (South→North):**
+- Start node (bottom): Octant **2** (NE, azimuth ~22.5°)
+- End node (top): Octant **5** (S, azimuth ~202.5°)
+- **New ID:** `909-25`
+
+**Southbound Travel (North→South):**
+- Start node (top): Octant **5** (S, azimuth ~202.5°)
+- End node (bottom): Octant **2** (NE, azimuth ~22.5°)
+- **New ID:** `909-52`
+
+### Step 4: Applying to Node Intersections
+
+**At each node, the octant code indicates the compass direction:**
+
+**Example Node with 4 Approaches:**
+```
+        Approach from N (octant 1)
+                 |
+                 |
+    W (7) ----(Node)---- E (3)
+                 |
+                 |
+        Approach from S (5)
+```
+
+**Use Case:** When querying Google Maps for route alternatives:
+- `909-25` requests routes approaching from **NE** (octant 2) and departing toward **S** (octant 5)
+- `909-52` requests routes approaching from **S** (octant 5) and departing toward **NE** (octant 2)
+
+This enables **direction-specific route queries** that distinguish between different turning movements at intersections.
+
+### Complete Workflow Summary
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 1: Input Road Network                                     │
+│ • Two-sided links with duplicate IDs (e.g., 909, 909)         │
+│ • Complex polyline geometries                                  │
+└─────────────────┬───────────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 2: Crow Flight Simplification                            │
+│ • Create straight-line geometry from start to end             │
+│ • Preserve original geometry in separate output               │
+└─────────────────┬───────────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 3: Azimuth Calculation (WGS84 Geodesic)                 │
+│ • Forward azimuth (A→B): e.g., 22.5° (NE)                     │
+│ • Backward azimuth (B→A): e.g., 202.5° (SW)                   │
+│ • Axis-order correction if needed                             │
+└─────────────────┬───────────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 4: Octant Classification                                 │
+│ • Map azimuths to 8 compass sectors (1-8)                     │
+│ • Start octant: backward azimuth → octant 2 (NE)              │
+│ • End octant: forward azimuth → octant 5 (S)                  │
+└─────────────────┬───────────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 5: Directional ID Generation                             │
+│ • Format: {original_id}-{start_octant}{end_octant}            │
+│ • Example: 909-25 (NE→S direction)                            │
+│ • Example: 909-52 (S→NE direction)                            │
+└─────────────────┬───────────────────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 6: Output Files                                          │
+│ • Azimuth ID shapefile (original geometry + new IDs)          │
+│ • Crow flight shapefile (diagnostics + straight geometry)     │
+│ • Crow CSV (tabular format)                                   │
+│ • Excel A-B (Google Maps query format)                        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Key Benefits of Directional IDs
+
+1. **Direction-Specific Queries:** Query Google Maps for routes specific to approach/departure orientations
+2. **Intersection Analysis:** Distinguish between different turning movements at complex junctions
+3. **Asymmetric Traffic:** Model directional differences in traffic patterns
+4. **Route Alternatives:** Request alternatives for specific directional scenarios
+
+---
+
 ## Input Requirements
 
 ### Polyline Network
