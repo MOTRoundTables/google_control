@@ -24,6 +24,9 @@ from components.maps import render_maps_page
 # Import control component
 from components.control import control_page
 
+# Import azimuth component
+from components.azimuth import azimuth_page
+
 # Try to import streamlit-option-menu for professional icons
 try:
     from streamlit_option_menu import option_menu
@@ -275,9 +278,11 @@ def main():
 
     # Define pages with professional icons using Unicode symbols
     page_configs = [
+        ("Azimuth Preprocessing", "🧭", "Azimuth Preprocessing"),
         ("Dataset Control", "🛡️", "Dataset Control"),
         ("Aggregation", "⏰", "Aggregation"),
         ("Aggregated Maps", "🗺️", "Aggregated Maps"),
+        ("Azimuth Methodology", "📐", "Azimuth Methodology"),
         ("Control Methodology", "🔬", "Control Methodology"),
         ("Aggregation Methodology", "📚", "Aggregation Methodology")
     ]
@@ -291,7 +296,7 @@ def main():
             selected_page = option_menu(
                 menu_title=None,
                 options=[config[0] for config in page_configs],
-                icons=["shield-check", "clock", "map", "tools", "book"],
+                icons=["compass", "shield-check", "clock", "map", "rulers", "tools", "book"],
                 menu_icon="cast",
                 default_index=0,
                 orientation="vertical",
@@ -364,10 +369,14 @@ def main():
         maps_page()
     elif page == "Dataset Control":
         control_page()
+    elif page == "Azimuth Preprocessing":
+        azimuth_page()
     elif page == "Aggregation Methodology":
         methodology_page()
     elif page == "Control Methodology":
         control_methodology_page()
+    elif page == "Azimuth Methodology":
+        azimuth_methodology_page()
 
 
 def maps_page():
@@ -1611,6 +1620,22 @@ def control_methodology_page():
     # Read and display the methodology from the control component
     from pathlib import Path
     methodology_path = Path("components/control/methodology.md")
+    if methodology_path.exists():
+        with open(methodology_path, "r", encoding="utf-8") as f:
+            st.markdown(f.read())
+    else:
+        st.error("Methodology documentation not found")
+
+
+def azimuth_methodology_page():
+    """Azimuth methodology page - redirects to methodology.md"""
+    st.title("📐 Azimuth Preprocessing Methodology")
+    st.markdown("---")
+    st.markdown("")
+
+    # Read and display the methodology from the azimuth component
+    from pathlib import Path
+    methodology_path = Path("components/azimuth/methodology.md")
     if methodology_path.exists():
         with open(methodology_path, "r", encoding="utf-8") as f:
             st.markdown(f.read())
