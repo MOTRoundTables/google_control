@@ -4,11 +4,12 @@ A comprehensive traffic monitoring and analysis system that processes Google Map
 
 ## 🎯 Overview
 
-This system processes large-scale CSV datasets from Google Maps traffic monitoring and provides three specialized components:
+This system processes large-scale CSV datasets from Google Maps traffic monitoring and provides four specialized components:
 
 1. **🔍 Dataset Control & Validation**: Validate Google Maps polyline data against reference shapefiles using geometric similarity analysis
-2. **⚙️ Data Processing Pipeline**: Process millions of CSV records with timezone-aware analysis and quality reporting
-3. **🗺️ Interactive Maps**: Two specialized map visualizations for hourly and weekly traffic pattern analysis
+2. **🧭 Azimuth Preprocessing**: Calculate directional azimuths and octant codes for road network shapefiles to enable direction-specific route queries
+3. **⚙️ Data Processing Pipeline**: Process millions of CSV records with timezone-aware analysis and quality reporting
+4. **🗺️ Interactive Maps**: Two specialized map visualizations for hourly and weekly traffic pattern analysis
 
 ## ✨ Key Features
 
@@ -17,6 +18,13 @@ This system processes large-scale CSV datasets from Google Maps traffic monitori
 - **Configuration-Based Testing**: Individual route assessment with transparent result metrics
 - **Data Completeness Analysis**: Auto-detect missing observations with Code 94/95 gap analysis
 - **Spatial Visualization**: Failed observations shapefile with mixed geometry sources
+
+### Azimuth Preprocessing
+- **Directional ID Generation**: Creates unique IDs encoding compass orientations at start/end nodes
+- **Geodesic Azimuth Calculation**: WGS84 ellipsoid-based compass bearings for accurate global positioning
+- **Octant Classification**: 8-direction coding system (N, NE, E, SE, S, SW, W, NW)
+- **Automatic Path Detection**: Extracts dates from filenames and generates organized output structure
+- **Multiple Output Formats**: Shapefiles, CSV, and Excel files optimized for Google Maps route queries
 
 ### Data Processing Pipeline
 - **Large Dataset Support**: Process millions of rows with chunked reading and memory optimization
@@ -87,6 +95,11 @@ google_agg/
 │   │   ├── validator.py           # Geometric validation engine
 │   │   ├── report.py              # Reporting and aggregation
 │   │   └── methodology.md         # Technical documentation
+│   ├── azimuth/                   # Azimuth Preprocessing
+│   │   ├── page.py                # UI and azimuth calculation pipeline
+│   │   ├── pre_process_map_with_paths_new.py  # Core azimuth engine
+│   │   ├── install_geo_stack.py   # Dependency installer
+│   │   └── methodology.md         # Technical documentation
 │   ├── aggregation/               # Data Aggregation Pipeline
 │   │   ├── pipeline.py            # Core CSV processing
 │   │   ├── quality.py             # Data quality analysis
@@ -106,6 +119,9 @@ google_agg/
 ├── test_data/                     # Sample datasets
 │   ├── control/                   # Control test cases and scenarios
 │   └── aggregation/               # Map test data and shapefiles
+├── runs/                          # Organized batch processing runs
+│   ├── 1_10_25/                   # Example batch (Oct 1, 2025)
+│   └── 2_11_25/                   # Example batch (Nov 2, 2025) - Azimuth test data
 ├── output/                        # All system outputs
 │   ├── control/                   # Control validation outputs (timestamped folders)
 │   └── aggregation/               # Aggregation outputs (organized by source)
@@ -118,7 +134,7 @@ google_agg/
 
 After running `streamlit run app.py`, open your browser to `http://localhost:8501`
 
-The application provides three main components:
+The application provides four main components:
 
 #### 🔍 Dataset Control & Validation
 **Purpose**: Validate Google Maps polyline data against reference shapefiles
@@ -144,6 +160,37 @@ output/control/DD_MM_YY_HH_MM/      # Timestamped validation outputs
 ├── link_report_shapefile.zip       # Complete spatial package
 └── failed_observations_shapefile.zip # Failed observations spatial
 ```
+
+#### 🧭 Azimuth Preprocessing
+**Purpose**: Calculate directional azimuths and octant codes for road network shapefiles
+
+**Required Files**:
+- Shapefile with road network geometry (.shp or .zip package)
+- Must follow naming pattern: `DD_MM_YYYY_base_map.shp` (e.g., `2_11_2025_base_map.shp`)
+
+**Key Features**:
+- **Geodesic Azimuth Calculation**: WGS84 ellipsoid-based compass bearings
+- **Octant Classification**: 8-direction codes (N=1, NE=2, E=3, SE=4, S=5, SW=6, W=7, NW=8)
+- **Directional ID Format**: `{original_id}-{start_octant}{end_octant}` (e.g., `909-25`)
+- **Automatic Organization**: Date-based folder structure with multiple output formats
+- **Axis-Order Correction**: Automatic detection and correction of coordinate issues
+
+**Output Files**:
+```
+runs/{batch_id}/input/maps/
+├── basemap/{date}_azimut_base_map/
+│   ├── {date}_base_map_azimut_id.shp    # Original geometry + directional IDs
+│   ├── {date}_base_map_crow_only.shp    # Crow flight + diagnostics
+│   └── {date}_base_map_crow_only.csv    # Tabular format
+└── a_b/
+    └── {date}_a_b.xlsx                   # Excel for Google Maps queries
+```
+
+**Use Cases**:
+- Direction-specific Google Maps route alternative queries
+- Intersection turning movement analysis
+- Asymmetric traffic pattern modeling
+- Junction-level directional flow analysis
 
 #### ⚙️ Data Aggregation Pipeline
 **Purpose**: Process large CSV datasets with quality analysis
@@ -369,7 +416,10 @@ python -c "import sys; print(sys.version); import platform; print(platform.syste
 4. **Performance**: Enable chunked processing for datasets >100k records
 
 ### Getting Help
-- **Documentation**: Check `components/control/methodology.md` for technical details
+- **Documentation**:
+  - Control validation: `components/control/methodology.md`
+  - Azimuth preprocessing: `components/azimuth/methodology.md`
+  - Aggregation pipeline: `components/aggregation/methodology.md`
 - **Error Logs**: Review `logs/` directory for detailed error information
 - **Component Tests**: Run individual component tests to isolate issues
 
@@ -378,6 +428,7 @@ python -c "import sys; print(sys.version); import platform; print(platform.syste
 The system uses a modular component architecture:
 
 - **🔍 Control Component**: Standalone validation with comprehensive reporting
+- **🧭 Azimuth Component**: Directional orientation coding for road networks
 - **⚙️ Processing Component**: Scalable data pipeline with quality analysis
 - **🗺️ Maps Component**: Interactive visualization with advanced filtering
 - **🛠️ Utils**: Support utilities for debugging, testing, and setup
@@ -386,8 +437,10 @@ Each component can be used independently or as part of the integrated system.
 
 ## 📈 Version History
 
-### Version 2.0.0 (Current)
-- ✅ Complete modular architecture
+### Version 2.1.0 (Current)
+- ✅ Complete modular architecture with 4 components
+- ✅ Azimuth Preprocessing component with geodesic calculations
+- ✅ Directional ID generation for route alternative queries
 - ✅ Dataset Control with Code 94/95 analysis
 - ✅ Auto-date detection for completeness analysis
 - ✅ Mixed-geometry shapefile generation
@@ -395,6 +448,12 @@ Each component can be used independently or as part of the integrated system.
 - ✅ Comprehensive setup system
 - ✅ Hebrew encoding support
 - ✅ Performance optimizations (45x faster CRS transformations)
+
+### Version 2.0.0
+- Complete modular architecture
+- Dataset Control with validation codes
+- Interactive maps with filtering
+- Hebrew encoding support
 
 ### Version 1.0.0
 - Core processing pipeline

@@ -219,6 +219,16 @@ runs/1_10_25/output/raw/data.csv
 runs/1_10_25/output/raw/segments.csv
 runs/1_10_25/output/raw/steps.csv
 
+# Allow runs/2_11_25/ - Azimuth preprocessing test data
+!runs/2_11_25/
+!runs/2_11_25/input/
+!runs/2_11_25/input/maps/
+!runs/2_11_25/input/maps/basemap/
+!runs/2_11_25/input/maps/basemap/*/
+!runs/2_11_25/input/maps/a_b/
+# Exclude large CSV outputs (keep small diagnostic files)
+runs/2_11_25/**/*_crow_only.csv
+
 # Distribution packages (created by distribution scripts)
 distribution_packages/
 *.zip
