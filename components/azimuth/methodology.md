@@ -196,11 +196,45 @@ This enables **direction-specific route queries** that distinguish between diffe
 - **Required:** Each feature must have a valid geometry with defined CRS
 
 ### Identifier Column
-The processing script auto-detects a suitable ID field from common candidates:
-- `keta_id`, `ketaid`, `link_id`, `segment_id`, `linkid`
-- `id`, `Id`, `ID`
 
-If no suitable field is found, a synthetic `_rowid_` field is created.
+#### Auto-Detection Priority
+The processing script auto-detects a suitable ID field using the `pick_id_field()` function, searching for fields in this **exact priority order**:
+
+1. `keta_id`
+2. `ketaid`  ← **Common field in Israel road network shapefiles**
+3. `link_id`
+4. `segment_id`
+5. `linkid`
+6. `id`
+7. `Id`
+8. `ID`
+
+**Detection Logic:**
+- The first matching field name found in the input shapefile is selected
+- Field name matching is **case-sensitive**
+- If no suitable field is found, a synthetic `_rowid_` field is created (sequential numbers starting from 1)
+
+#### Field Name Mapping in Outputs
+
+**Original ID Field → Output Field Names:**
+
+| Input Shapefile | Detection Result | Output Files |
+|----------------|------------------|--------------|
+| Field detected (e.g., `ketaid`) | Uses detected field values | **Azimuth ID Shapefile:** `Id` only<br>**Crow Shapefile/CSV:** `kid` (original) + `Id` (new directional ID) |
+| No field found | Creates synthetic `_rowid_` | Same as above, using row numbers as IDs |
+
+**Example:**
+- **Input shapefile** has `ketaid` field with values: `1234`, `5678`, `909`
+- **Azimuth ID shapefile** output:
+  - `Id` = `1234-51`, `5678-32`, `909-25` (directional IDs)
+- **Crow shapefile/CSV** output:
+  - `kid` = `1234`, `5678`, `909` (original values from `ketaid`)
+  - `Id` = `1234-51`, `5678-32`, `909-25` (new directional IDs)
+
+#### What Happens to Other Fields
+- **Other input fields are NOT preserved** in output files (e.g., `to`, `from`, `name`)
+- Only the detected ID field and geometry are retained
+- If you need other attributes, join outputs back to original shapefile using the `kid` field
 
 ---
 
